@@ -32,7 +32,7 @@ EOT
     passwd
 
     # Install additional packages
-    pacman -S --noconfirm networkmanager sudo grub efibootmgr sbctl linux-headers dkms
+    pacman -S --noconfirm networkmanager sudo grub efibootmgr sbctl linux-headers dkms $EXTRA_PACKAGES
 
     # Enable NetworkManager
     systemctl enable NetworkManager
@@ -48,7 +48,7 @@ EOT
     mkinitcpio -P
 
     # Install GRUB
-    grub-install --target=x86_64-efi --efi-directory=/boot/efi --bootloader-id=GRUB
+    grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
 
     # Modify GRUB for verbose logging if desired
     if [ "$ENABLE_LOGGING" == "yes" ]; then
@@ -66,8 +66,76 @@ EOT
     # Grant sudo privileges to wheel group
     sed -i '/^# %wheel ALL=(ALL) ALL$/s/^# //' /etc/sudoers
 
-    # Inform user about post-install Secure Boot setup
-    echo "Secure Boot setup will be completed after rebooting into the new system."
+    # Create directory for scripts
+    mkdir -p /home/"$USERNAME"/install_arch_scripts
+    chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts
+
+    # Generate Secure Boot configuration script if desired
+    if [ "$GENERATE_SB_SCRIPT" == "yes" ]; then
+        cat <<EOSB > /home/"$USERNAME"/install_arch_scripts/configure_secure_boot.sh
+#!/bin/bash
+set -e
+# Verify you are in setup mode
+sudo sbctl status
+
+# Create custom Secure Boot keys
+sudo sbctl create-keys
+
+# Enroll custom keys including Microsoft's certificates
+sudo sbctl enroll-keys -m
+
+# Verify key enrollment
+sudo sbctl status
+
+# Sign EFI binaries
+sudo sbctl sign -s /boot/EFI/GRUB/grubx64.efi
+sudo sbctl sign -s /boot/vmlinuz-linux
+
+# If NVIDIA drivers are installed, sign the modules
+if [ -d "/usr/lib/modules/\$(uname -r)/kernel/drivers/video" ]; then
+    sudo find /usr/lib/modules/\$(uname -r)/kernel/drivers/video -name "*.ko" -exec sbctl sign -s {} \;
+fi
+
+# Rebuild initramfs
+sudo mkinitcpio -P
+
+# Regenerate GRUB configuration
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+echo "Secure Boot configuration completed successfully."
+EOSB
+        chmod +x /home/"$USERNAME"/install_arch_scripts/configure_secure_boot.sh
+        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts/configure_secure_boot.sh
+    fi
+
+    # Generate scripts to enable/disable GRUB logs
+    if [ "$ENABLE_LOGGING" == "yes" ]; then
+        # Script to disable GRUB logs
+        cat <<EODISABLE > /home/"$USERNAME"/install_arch_scripts/disable_grub_logging.sh
+#!/bin/bash
+set -e
+sudo sed -i '/GRUB_CMDLINE_LINUX_DEFAULT/ s/ debug//' /etc/default/grub
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+echo "GRUB verbose logging disabled."
+EODISABLE
+        chmod +x /home/"$USERNAME"/install_arch_scripts/disable_grub_logging.sh
+        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts/disable_grub_logging.sh
+
+        # Script to enable GRUB logs
+        cat <<EOENABLE > /home/"$USERNAME"/install_arch_scripts/enable_grub_logging.sh
+#!/bin/bash
+set -e
+sudo sed -i '/GRUB_CMDLINE_LINUX_DEFAULT/ s/"$/ debug"/' /etc/default/grub
+sudo grub-mkconfig -o /boot/grub/grub.cfg
+echo "GRUB verbose logging enabled."
+EOENABLE
+        chmod +x /home/"$USERNAME"/install_arch_scripts/enable_grub_logging.sh
+        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts/enable_grub_logging.sh
+    fi
+
+    # Inform user about post-install scripts
+    echo "Post-install scripts have been generated in ~/install_arch_scripts."
+    echo "Please review and run them as needed after rebooting."
 }
 
 # Main script execution starts here
@@ -174,8 +242,8 @@ fi
 echo "EFI partition found at $EFI_PARTITION"
 
 # Mount EFI partition
-mkdir -p /mnt/boot/efi
-mount "$EFI_PARTITION" /mnt/boot/efi
+mkdir -p /mnt/boot
+mount "$EFI_PARTITION" /mnt/boot
 
 # Install base system
 echo "Installing base system..."
@@ -188,6 +256,8 @@ genfstab -U /mnt >> /mnt/etc/fstab
 prompt "Enter your username" USERNAME
 prompt "Do you want to install NVIDIA drivers? (yes/no)" INSTALL_NVIDIA
 prompt "Do you want to enable verbose logging in GRUB? (yes/no)" ENABLE_LOGGING
+prompt "Do you want to generate a Secure Boot configuration script? (yes/no)" GENERATE_SB_SCRIPT
+prompt "Enter any extra packages to install (space-separated, e.g., 'neovim git')" EXTRA_PACKAGES
 
 # Copy variables to chroot environment
 echo "REGION='$REGION'" >> /mnt/root/install.conf
@@ -196,6 +266,8 @@ echo "HOSTNAME='$HOSTNAME'" >> /mnt/root/install.conf
 echo "USERNAME='$USERNAME'" >> /mnt/root/install.conf
 echo "INSTALL_NVIDIA='$INSTALL_NVIDIA'" >> /mnt/root/install.conf
 echo "ENABLE_LOGGING='$ENABLE_LOGGING'" >> /mnt/root/install.conf
+echo "GENERATE_SB_SCRIPT='$GENERATE_SB_SCRIPT'" >> /mnt/root/install.conf
+echo "EXTRA_PACKAGES='$EXTRA_PACKAGES'" >> /mnt/root/install.conf
 
 # Copy functions to chroot environment
 declare -f prompt > /mnt/root/functions.sh
@@ -209,7 +281,7 @@ configure_system
 rm /root/install.conf /root/functions.sh
 "
 
-# Unmount and reboot with warning
+# Unmount and reboot
 echo "Installation complete!"
 echo ""
 prompt "Press Enter to reboot now or type 'cancel' to stay in the live environment" REBOOT_CHOICE
