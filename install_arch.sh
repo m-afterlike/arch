@@ -19,6 +19,9 @@ configure_system() {
     locale-gen
     echo "LANG=en_US.UTF-8" > /etc/locale.conf
 
+    # Create mount directories
+    mkdir -p /mnt/boot
+
     # Set hostname
     echo "$HOSTNAME" > /etc/hostname
     cat <<EOT > /etc/hosts
@@ -313,9 +316,6 @@ echo "Setting up swap space..."
 mkswap -L "Linux Swap" "$SWAP_PARTITION"
 swapon "$SWAP_PARTITION"
 free -m
-
-# Create mount directories
-mkdir -p /mnt/boot
 
 # Format and mount root partition
 echo "Formatting and mounting root partition..."
