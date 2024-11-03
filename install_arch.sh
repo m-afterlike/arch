@@ -72,6 +72,39 @@ EOT
 
 # Main script execution starts here
 
+# Function to display partitioning instructions
+display_partitioning_instructions() {
+    echo "-----------------------------------------------"
+    echo "          Manual Partitioning Instructions     "
+    echo "-----------------------------------------------"
+    echo ""
+    echo "You will now use 'gdisk' to manually partition your disk."
+    echo ""
+    echo "Please create the following partitions in the unallocated space:"
+    echo ""
+    echo "1. Swap Partition:"
+    echo "   - Type: Linux swap (Hex code: 8200)"
+    echo "   - Size: ${MEM_SIZE}G"
+    echo ""
+    echo "2. Root Partition:"
+    echo "   - Type: Linux filesystem (Hex code: 8300)"
+    echo "   - Size: Remaining space"
+    echo ""
+    echo "Steps:"
+    echo "a) Type 'n' to create a new partition."
+    echo "b) Accept defaults for partition number and first sector."
+    echo "c) For the last sector, enter '+${MEM_SIZE}G' for the swap partition."
+    echo "   For the root partition, accept the default to use remaining space."
+    echo "d) Enter the appropriate hex code when prompted:"
+    echo "   - '8200' for the swap partition"
+    echo "   - '8300' for the root partition"
+    echo "e) Repeat the steps to create both partitions."
+    echo "f) When done, type 'w' to write changes and exit."
+    echo ""
+    echo "Press Enter to launch 'gdisk'..."
+    read -r
+}
+
 # Prompt for region, city, hostname
 prompt "Enter your region (e.g., 'America')" REGION
 prompt "Enter your city (e.g., 'New_York')" CITY
@@ -102,10 +135,9 @@ if [ "$CONFIRM_DISK" != "yes" ]; then
     exit 1
 fi
 
-# Inform the user about non-destructive partitioning
+# Inform the user about non-destructive partitioning and display instructions
 echo "The script will now guide you through partitioning the disk without deleting existing data."
-echo "Press Enter to continue."
-read -r
+display_partitioning_instructions
 
 # Launch gdisk for manual partitioning
 gdisk "$DISK"
@@ -130,7 +162,7 @@ mkfs.ext4 -L "root" "$ROOT_PARTITION"
 mount "$ROOT_PARTITION" /mnt
 
 # Identify existing EFI partition
-EFI_PARTITION=$(lsblk -lp | grep -E "efi|boot" | grep "part" | awk '{print $1}' | head -n 1)
+EFI_PARTITION=$(lsblk -lp | grep -Ei "efi|boot" | grep "part" | awk '{print $1}' | head -n 1)
 
 if [ -z "$EFI_PARTITION" ]; then
     echo "EFI partition not found."
@@ -165,18 +197,27 @@ echo "USERNAME='$USERNAME'" >> /mnt/root/install.conf
 echo "INSTALL_NVIDIA='$INSTALL_NVIDIA'" >> /mnt/root/install.conf
 echo "ENABLE_LOGGING='$ENABLE_LOGGING'" >> /mnt/root/install.conf
 
-# Chroot into the new system
+# Copy functions to chroot environment
+declare -f prompt > /mnt/root/functions.sh
+declare -f configure_system >> /mnt/root/functions.sh
+
+# Chroot into the new system and run configuration
 arch-chroot /mnt /bin/bash -c "
 source /root/install.conf
-$(declare -f prompt)
-$(declare -f configure_system)
+source /root/functions.sh
 configure_system
+rm /root/install.conf /root/functions.sh
 "
 
-# Remove configuration file
-rm /mnt/root/install.conf
-
-# Unmount and reboot
-umount -R /mnt
-echo "Installation complete. Please remove the installation media and reboot."
-reboot
+# Unmount and reboot with warning
+echo "Installation complete!"
+echo ""
+prompt "Press Enter to reboot now or type 'cancel' to stay in the live environment" REBOOT_CHOICE
+if [ "$REBOOT_CHOICE" == "cancel" ]; then
+    echo "Reboot cancelled. You can now perform additional tasks or reboot manually when ready."
+else
+    echo "Rebooting now..."
+    sleep 5
+    umount -R /mnt
+    reboot
+fi
