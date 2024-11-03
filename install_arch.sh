@@ -263,7 +263,7 @@ display_partitioning_instructions() {
     echo ""
     echo "1. Swap Partition:"
     echo "   - Type: Linux swap (Hex code: 8200)"
-    echo "   - Size: ${MEM_SIZE}G"
+    echo "   - Size: ${MEM_SIZE}"
     echo ""
     echo "2. Root Partition:"
     echo "   - Type: Linux filesystem (Hex code: 8300)"
