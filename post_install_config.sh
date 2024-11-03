@@ -11,9 +11,10 @@ echo "2) Disable GRUB verbose logging"
 echo "3) Set up Secure Boot"
 echo "4) Enable os-prober (detect other OSes in GRUB)"
 echo "5) Disable os-prober"
-echo "6) Exit"
+echo "6) Create user directories like ~/Desktop and ~/Music"
+echo "7) Exit"
 echo ""
-read -p "Enter your choice [1-6]: " CHOICE
+read -p "Enter your choice [1-7]: " CHOICE
 
 case "$CHOICE" in
     1)
@@ -140,6 +141,14 @@ case "$CHOICE" in
         echo "os-prober disabled. GRUB will not detect other operating systems."
         ;;
     6)
+        # Install xdg-user-dirs
+        sudo pacman -S --noconfirm xdg-user-dirs
+
+        xdg-user-dirs-update
+
+        echo "Directories were successfully created"
+        ;;
+    7)
         echo "Exiting."
         ;;
     *)
