@@ -8,286 +8,20 @@ prompt() {
     read -rp "$1: " "$2"
 }
 
-# Function to perform tasks inside chroot
-configure_system() {
-    # Set timezone
-    ln -sf "/usr/share/zoneinfo/$REGION/$CITY" /etc/localtime
-    hwclock --systohc
-
-    # Generate locales
-    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
-    locale-gen
-    echo "LANG=en_US.UTF-8" > /etc/locale.conf
-
-    # Set hostname
-    echo "$HOSTNAME" > /etc/hostname
-    cat <<EOT > /etc/hosts
-127.0.0.1       localhost
-::1             localhost
-127.0.1.1       $HOSTNAME.localdomain    $HOSTNAME
-EOT
-
-    # Set root password
-    echo "Set root password:"
-    passwd
-
-    # Install additional packages
-    pacman -S --noconfirm networkmanager sudo grub efibootmgr sbctl linux-headers dkms $EXTRA_PACKAGES
-
-    # Enable NetworkManager
-    systemctl enable NetworkManager
-
-    # Install NVIDIA drivers if desired
-    if [ "$INSTALL_NVIDIA" == "yes" ]; then
-        pacman -S --noconfirm nvidia-dkms nvidia-utils
-        # Update mkinitcpio.conf
-        sed -i 's/^MODULES=.*/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
-    fi
-
-    # Generate initramfs
-    mkinitcpio -P
-
-    # Install GRUB
-    grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
-
-    # Modify GRUB for verbose logging if desired
-    if [ "$ENABLE_LOGGING" == "yes" ]; then
-        sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ debug"/' /etc/default/grub
-    fi
-
-    # Generate GRUB configuration
-    grub-mkconfig -o /boot/grub/grub.cfg
-
-    # Create new user and add to wheel group
-    useradd -m -G wheel -s /bin/bash "$USERNAME"
-    echo "Set password for user $USERNAME:"
-    passwd "$USERNAME"
-
-    # Grant sudo privileges to wheel group
-    echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel
-    chmod 440 /etc/sudoers.d/10-wheel
-
-    # Generate post-install configuration script in user's home directory
-    cat <<'EOSCRIPT' > /home/"$USERNAME"/post_install_config.sh
-#!/bin/bash
-set -e
-
-echo "-----------------------------------------------"
-echo "        Post-Install Configuration Script      "
-echo "-----------------------------------------------"
-echo ""
-echo "Please choose an option:"
-echo "1) Enable GRUB verbose logging"
-echo "2) Disable GRUB verbose logging"
-echo "3) Set up Secure Boot"
-echo "4) Enable os-prober (detect other OSes in GRUB)"
-echo "5) Disable os-prober"
-echo "6) Create user directories like ~/Desktop and ~/Music"
-echo "7) Exit"
-echo ""
-read -p "Enter your choice [1-7]: " CHOICE
-
-case "$CHOICE" in
-    1)
-        echo "Enabling GRUB verbose logging..."
-        sudo sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ debug"/' /etc/default/grub
-        sudo grub-mkconfig -o /boot/grub/grub.cfg
-        echo "GRUB verbose logging enabled."
-        ;;
-    2)
-        echo "Disabling GRUB verbose logging..."
-        sudo sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/ debug"$/"/' /etc/default/grub
-        sudo grub-mkconfig -o /boot/grub/grub.cfg
-        echo "GRUB verbose logging disabled."
-        ;;
-    3)
-        echo "Setting up Secure Boot..."
-        # Check sbctl status
-        SBCTL_STATUS=$(sudo sbctl status)
-        echo "$SBCTL_STATUS"
-
-        SETUP_MODE=$(echo "$SBCTL_STATUS" | grep "Setup Mode:" | awk '{print $4}')
-        SECURE_BOOT=$(echo "$SBCTL_STATUS" | grep "Secure Boot:" | awk '{print $4}')
-
-        if [[ "$SETUP_MODE" == "Enabled" && "$SECURE_BOOT" == "Disabled" ]]; then
-            echo "System is in Setup Mode with Secure Boot disabled."
-        else
-            echo "Warning: You must be in Setup Mode with Secure Boot disabled to proceed."
-            echo "Current Setup Mode: $SETUP_MODE"
-            echo "Current Secure Boot: $SECURE_BOOT"
-            echo ""
-            read -p "Do you want to proceed anyway? (yes/no): " PROCEED
-            if [[ "$PROCEED" != "yes" ]]; then
-                echo "Exiting Secure Boot setup."
-                exit 1
-            fi
-        fi
-
-        # Create custom Secure Boot keys
-        sudo sbctl create-keys
-
-        # Enroll custom keys including Microsoft's certificates
-        sudo sbctl enroll-keys -m
-
-        # Verify key enrollment
-        sudo sbctl status
-
-        # Pause
-        read -p "Press Enter to continue..."
-
-        # Search for 'grubx64.efi' and 'vmlinuz-linux'
-        echo "Detecting paths to sign..."
-        GRUBX64_EFI_PATH=$(sudo find /boot -name 'grubx64.efi' | head -n 1)
-        VMLINUZ_PATH=$(sudo find /boot -name 'vmlinuz-linux' | head -n 1)
-        GRUB_EFI_PATH=$(sudo find /boot -name 'grub.efi' | head -n 1)
-        CORE_EFI_PATH=$(sudo find /boot -name 'core.efi' | head -n 1)
-        
-        echo "Detected paths:"
-        echo "grubx64.efi: $GRUBX64_EFI_PATH"
-        echo "vmlinuz-linux: $VMLINUZ_PATH"
-        echo "grub.efi: $GRUB_EFI_PATH"
-        echo "core.efi: $CORE_EFI_PATH"
-
-        read -p "Do these paths look correct? (yes/no): " PATHS_CORRECT
-        if [[ "$PATHS_CORRECT" != "yes" ]]; then
-            echo "Please verify the paths and enter the correct paths."
-            echo "Enter the path to grubx64.efi (e.g., /boot/EFI/GRUB/grubx64.efi):"
-            read -p "> " GRUBX64_EFI_PATH
-            echo "Enter the path to vmlinuz-linux (e.g., /boot/vmlinuz-linux):"
-            read -p "> " VMLINUZ_PATH
-            echo "Enter the path to grub.efi (e.g., /boot/vmlinuz-linux):"
-            read -p "> " GRUB_EFI_PATH
-            echo "Enter the path to core.efi (e.g., /boot/vmlinuz-linux):"
-            read -p "> " CORE_EFI_PATH
-        fi
-
-        # Sign the detected files
-        sudo sbctl sign-all
-        sudo sbctl sign -s "$GRUB_EFI_PATH"
-        sudo sbctl sign -s "$VMLINUZ_PATH"
-
-        # Ask if user wants to add more paths
-        read -p "Do you need to sign additional files? (yes/no): " ADD_FILES
-        if [[ "$ADD_FILES" == "yes" ]]; then
-            echo "Enter additional paths to sign, separated by spaces:"
-            read -p "> " ADDITIONAL_PATHS
-            for path in $ADDITIONAL_PATHS; do
-                sudo sbctl sign -s "$path"
-            done
-        fi
-
-        # Run sbctl verify
-        sudo sbctl verify
-
-        # Pause
-        read -p "Press Enter to continue..."
-
-        # Rebuild initramfs
-        sudo mkinitcpio -P
-
-        # Regenerate GRUB configuration
-        sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-        # Completion message
-        echo "Secure Boot setup script completed."
-        read -p "Would you like to reboot into UEFI to enable Secure Boot? (yes/no): " REBOOT_CHOICE
-        if [[ "$REBOOT_CHOICE" == "yes" ]]; then
-            echo "Rebooting into UEFI firmware setup..."
-            sudo systemctl reboot --firmware-setup
-        else
-            echo "You can reboot and enable Secure Boot from UEFI settings later."
-        fi
-        ;;
-    4)
-        echo "Enabling os-prober..."
-        # Install os-prober
-        sudo pacman -S --noconfirm os-prober
-
-        # Enable os-prober in GRUB configuration
-        sudo sed -i '/^GRUB_DISABLE_OS_PROBER=/d' /etc/default/grub
-        echo "GRUB_DISABLE_OS_PROBER=false" | sudo tee -a /etc/default/grub
-
-        # Regenerate GRUB configuration
-        sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-        echo "os-prober enabled. GRUB will now detect other operating systems."
-        ;;
-    5)
-        echo "Disabling os-prober..."
-        # Remove or comment out the os-prober line in GRUB configuration
-        sudo sed -i '/^GRUB_DISABLE_OS_PROBER=/d' /etc/default/grub
-        echo "GRUB_DISABLE_OS_PROBER=true" | sudo tee -a /etc/default/grub
-
-        # Regenerate GRUB configuration
-        sudo grub-mkconfig -o /boot/grub/grub.cfg
-
-        echo "os-prober disabled. GRUB will not detect other operating systems."
-        ;;
-    6)
-        # Install xdg-user-dirs
-        sudo pacman -S --noconfirm xdg-user-dirs
-
-        xdg-user-dirs-update
-
-        echo "Directories were successfully created"
-        ;;
-    7)
-        echo "Exiting."
-        ;;
-    *)
-        echo "Invalid choice. Exiting."
-        ;;
-esac
-EOSCRIPT
-
-    # Make the script executable and set ownership
-    chmod +x /home/"$USERNAME"/post_install_config.sh
-    chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/post_install_config.sh
-
-    # Inform user about the post-install script
-    echo "A post-install configuration script has been generated in your home directory as 'post_install_config.sh'."
-    echo "You can run it after rebooting to perform additional configurations."
-}
-
 # Main script execution starts here
 
-# Function to display partitioning instructions
-display_partitioning_instructions() {
-    echo "-----------------------------------------------"
-    echo "          Manual Partitioning Instructions     "
-    echo "-----------------------------------------------"
-    echo ""
-    echo "You will now use 'gdisk' to manually partition your disk."
-    echo ""
-    echo "Please create the following partitions in the unallocated space:"
-    echo ""
-    echo "1. Swap Partition:"
-    echo "   - Type: Linux swap (Hex code: 8200)"
-    echo "   - Size: ${MEM_SIZE}"
-    echo ""
-    echo "2. Root Partition:"
-    echo "   - Type: Linux filesystem (Hex code: 8300)"
-    echo "   - Size: Remaining space"
-    echo ""
-    echo "Steps:"
-    echo "a) Type 'n' to create a new partition."
-    echo "b) Accept defaults for partition number and first sector."
-    echo "c) For the last sector, enter '+${MEM_SIZE}G' for the swap partition."
-    echo "   For the root partition, accept the default to use remaining space."
-    echo "d) Enter the appropriate hex code when prompted:"
-    echo "   - '8200' for the swap partition"
-    echo "   - '8300' for the root partition"
-    echo "e) Repeat the steps to create both partitions."
-    echo "f) When done, type 'w' to write changes and exit."
-    echo ""
-    echo "Press Enter to launch 'gdisk'..."
-    read -r
-}
-
-# Prompt for region, city, hostname
+# Prompt for initial configurations
 prompt "Enter your region (e.g., 'America')" REGION
 prompt "Enter your city (e.g., 'New_York')" CITY
 prompt "Enter your hostname" HOSTNAME
+prompt "Enter your username" USERNAME
+prompt "Do you want to install NVIDIA drivers? (yes/no)" INSTALL_NVIDIA
+prompt "Do you want to enable verbose logging in GRUB? (yes/no)" ENABLE_LOGGING
+prompt "Do you want to set up OpenSSH for local networks? (yes/no)" INSTALL_OPENSSH
+prompt "Do you want to install NetworkManager? (yes/no)" INSTALL_NETWORKMANAGER
+prompt "Enter any extra packages to install (space-separated, e.g., 'neovim git')" EXTRA_PACKAGES
+prompt "Do you want to install GRUB for dual booting? (yes/no)" INSTALL_GRUB_DUALBOOT
+prompt "Do you want to generate the post-install script? (yes/no)" GENERATE_POST_INSTALL_SCRIPT
 
 # Set keyboard layout
 loadkeys us
@@ -316,6 +50,37 @@ fi
 
 # Inform the user about non-destructive partitioning and display instructions
 echo "The script will now guide you through partitioning the disk without deleting existing data."
+display_partitioning_instructions() {
+    echo "-----------------------------------------------"
+    echo "          Manual Partitioning Instructions     "
+    echo "-----------------------------------------------"
+    echo ""
+    echo "You will now use 'gdisk' to manually partition your disk."
+    echo ""
+    echo "Please create the following partitions in the unallocated space:"
+    echo ""
+    echo "1. Swap Partition:"
+    echo "   - Type: Linux swap (Hex code: 8200)"
+    echo "   - Size: ${MEM_SIZE}G"
+    echo ""
+    echo "2. Root Partition:"
+    echo "   - Type: Linux filesystem (Hex code: 8300)"
+    echo "   - Size: Remaining space"
+    echo ""
+    echo "Steps:"
+    echo "a) Type 'n' to create a new partition."
+    echo "b) Accept defaults for partition number and first sector."
+    echo "c) For the last sector, enter '+${MEM_SIZE}G' for the swap partition."
+    echo "   For the root partition, accept the default to use remaining space."
+    echo "d) Enter the appropriate hex code when prompted:"
+    echo "   - '8200' for the swap partition"
+    echo "   - '8300' for the root partition"
+    echo "e) Repeat the steps to create both partitions."
+    echo "f) When done, type 'w' to write changes and exit."
+    echo ""
+    echo "Press Enter to launch 'gdisk'..."
+    read -r
+}
 display_partitioning_instructions
 
 # Launch gdisk for manual partitioning
@@ -363,12 +128,6 @@ pacstrap /mnt base linux linux-firmware
 # Generate fstab
 genfstab -U /mnt >> /mnt/etc/fstab
 
-# Prompt for additional configurations
-prompt "Enter your username" USERNAME
-prompt "Do you want to install NVIDIA drivers? (yes/no)" INSTALL_NVIDIA
-prompt "Do you want to enable verbose logging in GRUB? (yes/no)" ENABLE_LOGGING
-prompt "Enter any extra packages to install (space-separated, e.g., 'neovim git')" EXTRA_PACKAGES
-
 # Copy variables to chroot environment
 echo "REGION='$REGION'" >> /mnt/root/install.conf
 echo "CITY='$CITY'" >> /mnt/root/install.conf
@@ -376,11 +135,129 @@ echo "HOSTNAME='$HOSTNAME'" >> /mnt/root/install.conf
 echo "USERNAME='$USERNAME'" >> /mnt/root/install.conf
 echo "INSTALL_NVIDIA='$INSTALL_NVIDIA'" >> /mnt/root/install.conf
 echo "ENABLE_LOGGING='$ENABLE_LOGGING'" >> /mnt/root/install.conf
+echo "INSTALL_OPENSSH='$INSTALL_OPENSSH'" >> /mnt/root/install.conf
+echo "INSTALL_NETWORKMANAGER='$INSTALL_NETWORKMANAGER'" >> /mnt/root/install.conf
 echo "EXTRA_PACKAGES='$EXTRA_PACKAGES'" >> /mnt/root/install.conf
+echo "INSTALL_GRUB_DUALBOOT='$INSTALL_GRUB_DUALBOOT'" >> /mnt/root/install.conf
+echo "GENERATE_POST_INSTALL_SCRIPT='$GENERATE_POST_INSTALL_SCRIPT'" >> /mnt/root/install.conf
+
+# Function to perform tasks inside chroot
+configure_system() {
+    # Set timezone
+    ln -sf "/usr/share/zoneinfo/$REGION/$CITY" /etc/localtime
+    hwclock --systohc
+
+    # Generate locales
+    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen
+    locale-gen
+    echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+    # Set hostname
+    echo "$HOSTNAME" > /etc/hostname
+    cat <<EOT > /etc/hosts
+127.0.0.1       localhost
+::1             localhost
+127.0.1.1       $HOSTNAME.localdomain    $HOSTNAME
+EOT
+
+    # Set root password
+    echo "-----------------------------------------------"
+    echo "             Set Root Password                 "
+    echo "-----------------------------------------------"
+    passwd
+
+    # Initialize packages to install
+    PACKAGES="sudo grub efibootmgr sbctl linux-headers dkms"
+
+    # Add NetworkManager if selected
+    if [ "$INSTALL_NETWORKMANAGER" == "yes" ]; then
+        PACKAGES="$PACKAGES networkmanager"
+    fi
+
+    # Add OpenSSH if selected
+    if [ "$INSTALL_OPENSSH" == "yes" ]; then
+        PACKAGES="$PACKAGES openssh"
+    fi
+
+    # Add NVIDIA drivers if desired
+    if [ "$INSTALL_NVIDIA" == "yes" ]; then
+        PACKAGES="$PACKAGES nvidia-dkms nvidia-utils"
+    fi
+
+    # Function to install packages and handle errors
+    install_packages() {
+        for pkg in "$@"; do
+            pacman -S --needed --noconfirm "$pkg" || echo "Failed to install package $pkg, continuing..."
+        done
+    }
+
+    # Install packages
+    install_packages $PACKAGES $EXTRA_PACKAGES
+
+    # Enable NetworkManager if installed
+    if [ "$INSTALL_NETWORKMANAGER" == "yes" ]; then
+        systemctl enable NetworkManager
+    fi
+
+    # Enable and start OpenSSH if installed
+    if [ "$INSTALL_OPENSSH" == "yes" ]; then
+        systemctl enable sshd
+        systemctl start sshd
+    fi
+
+    # Configure NVIDIA drivers if installed
+    if [ "$INSTALL_NVIDIA" == "yes" ]; then
+        # Update mkinitcpio.conf
+        sed -i 's/^MODULES=.*/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
+    fi
+
+    # Generate initramfs
+    mkinitcpio -P
+
+    # Install GRUB
+    if [ "$INSTALL_GRUB_DUALBOOT" == "yes" ]; then
+        grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --modules="tpm" --disable-shim-lock
+    else
+        grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB
+    fi
+
+    # Modify GRUB for verbose logging if desired
+    if [ "$ENABLE_LOGGING" == "yes" ]; then
+        sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ debug"/' /etc/default/grub
+    fi
+
+    # Generate GRUB configuration
+    grub-mkconfig -o /boot/grub/grub.cfg
+
+    # Create new user and add to wheel group
+    useradd -m -G wheel -s /bin/bash "$USERNAME"
+    echo "-----------------------------------------------"
+    echo "          Set Password for User $USERNAME       "
+    echo "-----------------------------------------------"
+    passwd "$USERNAME"
+
+    # Grant sudo privileges to wheel group
+    echo "%wheel ALL=(ALL) ALL" > /etc/sudoers.d/10-wheel
+    chmod 440 /etc/sudoers.d/10-wheel
+
+    # Generate post-install script if selected
+    if [ "$GENERATE_POST_INSTALL_SCRIPT" == "yes" ]; then
+        curl -o /home/"$USERNAME"/post_install_config.sh https://raw.githubusercontent.com/m-afterlike/arch-install-script/main/post_install_config.sh
+        chmod +x /home/"$USERNAME"/post_install_config.sh
+        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/post_install_config.sh
+    fi
+
+    # Inform user about the post-install script
+    if [ "$GENERATE_POST_INSTALL_SCRIPT" == "yes" ]; then
+        echo "A post-install configuration script has been downloaded to your home directory as 'post_install_config.sh'."
+        echo "You can run it after rebooting to perform additional configurations."
+    fi
+}
 
 # Copy functions to chroot environment
 declare -f prompt > /mnt/root/functions.sh
 declare -f configure_system >> /mnt/root/functions.sh
+declare -f install_packages >> /mnt/root/functions.sh
 
 # Chroot into the new system and run configuration
 arch-chroot /mnt /bin/bash -c "
