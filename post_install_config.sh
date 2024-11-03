@@ -98,6 +98,12 @@ case "$CHOICE" in
         # Run sbctl verify
         sudo sbctl verify
 
+        # Rebuild initramfs
+        sudo mkinitcpio -P
+
+        # Regenerate GRUB configuration
+        sudo grub-mkconfig -o /boot/grub/grub.cfg
+
         # Completion message
         echo "Secure Boot setup script completed."
         read -p "Would you like to reboot into UEFI to enable Secure Boot? (yes/no): " REBOOT_CHOICE
