@@ -8,6 +8,13 @@ prompt() {
     read -rp "$1: " "$2"
 }
 
+# Function to install packages and handle errors
+install_packages() {
+    for pkg in "$@"; do
+        pacman -S --needed --noconfirm "$pkg" || echo "Failed to install package $pkg, continuing..."
+    done
+}
+
 # Main script execution starts here
 
 # Prompt for initial configurations
@@ -184,13 +191,6 @@ EOT
         PACKAGES="$PACKAGES nvidia-dkms nvidia-utils"
     fi
 
-    # Function to install packages and handle errors
-    install_packages() {
-        for pkg in "$@"; do
-            pacman -S --needed --noconfirm "$pkg" || echo "Failed to install package $pkg, continuing..."
-        done
-    }
-
     # Install packages
     install_packages $PACKAGES $EXTRA_PACKAGES
 
@@ -256,8 +256,8 @@ EOT
 
 # Copy functions to chroot environment
 declare -f prompt > /mnt/root/functions.sh
-declare -f configure_system >> /mnt/root/functions.sh
 declare -f install_packages >> /mnt/root/functions.sh
+declare -f configure_system >> /mnt/root/functions.sh
 
 # Chroot into the new system and run configuration
 arch-chroot /mnt /bin/bash -c "
