@@ -85,9 +85,11 @@ locale-gen
 # Prompt for swap size
 prompt "Enter the amount of RAM in GB (for swap partition)" MEM_SIZE
 
-# Detect available disks
-echo "Available disks:"
-lsblk -d -n -p -o NAME,SIZE
+# Detect available disks and partitions
+echo "Available disks and partitions:"
+lsblk -p -o NAME,SIZE,FSTYPE,MOUNTPOINT
+
+# Prompt for the disk
 prompt "Enter the disk to install Arch Linux on (e.g., '/dev/sda')" DISK
 
 # Confirm disk selection
@@ -98,15 +100,23 @@ if [ "$CONFIRM_DISK" != "yes" ]; then
     exit 1
 fi
 
-# Partition the disk
-echo "Partitioning the disk..."
-sgdisk -Z "$DISK"  # Zap all on disk
-sgdisk -n 0:0:+${MEM_SIZE}G -t 0:8200 -c 0:"Linux swap" "$DISK"  # SWAP partition
-sgdisk -n 0:0:0 -t 0:8300 -c 0:"Linux filesystem" "$DISK"         # ROOT partition
+# Inform the user about non-destructive partitioning
+echo "The script will now guide you through partitioning the disk without deleting existing data."
 
-# Get partition names
-SWAP_PARTITION=$(lsblk -lnp "$DISK" | grep "SWAP" | awk '{print $1}')
-ROOT_PARTITION=$(lsblk -lnp "$DISK" | grep "Linux filesystem" | awk '{print $1}')
+# Launch gdisk for manual partitioning
+echo "Launching gdisk for partitioning. Please create the necessary partitions in unallocated space."
+echo "Press Enter to continue."
+read -r
+
+gdisk "$DISK"
+
+# After gdisk exits, list partitions
+echo "Current partition layout:"
+lsblk -p "$DISK"
+
+# Prompt for swap and root partition paths
+prompt "Enter the swap partition (e.g., '/dev/sda5')" SWAP_PARTITION
+prompt "Enter the root partition (e.g., '/dev/sda6')" ROOT_PARTITION
 
 # Set up swap space
 echo "Setting up swap space..."
@@ -120,15 +130,14 @@ mkfs.ext4 -L "root" "$ROOT_PARTITION"
 mount "$ROOT_PARTITION" /mnt
 
 # Identify existing EFI partition
-EFI_PARTITION=$(lsblk -lp | grep -i "part /boot/efi" | awk '{print $1}')
-if [ -z "$EFI_PARTITION" ]; then
-    EFI_PARTITION=$(blkid -t TYPE=vfat | cut -d: -f1 | head -n 1)
-fi
+EFI_PARTITION=$(lsblk -lp | grep -E "efi|boot" | grep "part" | awk '{print $1}' | head -n 1)
 
 if [ -z "$EFI_PARTITION" ]; then
     echo "EFI partition not found. Installation aborted."
     exit 1
 fi
+
+echo "EFI partition found at $EFI_PARTITION"
 
 # Mount EFI partition
 mkdir -p /mnt/boot/efi
