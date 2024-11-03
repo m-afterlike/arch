@@ -169,6 +169,12 @@ case "$CHOICE" in
         # Run sbctl verify
         sudo sbctl verify
 
+        # Rebuild initramfs
+        sudo mkinitcpio -P
+
+        # Regenerate GRUB configuration
+        sudo grub-mkconfig -o /boot/grub/grub.cfg
+
         # Completion message
         echo "Secure Boot setup script completed."
         read -p "Would you like to reboot into UEFI to enable Secure Boot? (yes/no): " REBOOT_CHOICE
@@ -308,6 +314,9 @@ mkswap -L "Linux Swap" "$SWAP_PARTITION"
 swapon "$SWAP_PARTITION"
 free -m
 
+# Create mount directories
+mkdir -p /mnt/boot
+
 # Format and mount root partition
 echo "Formatting and mounting root partition..."
 mkfs.ext4 -L "root" "$ROOT_PARTITION"
@@ -326,7 +335,6 @@ fi
 echo "EFI partition found at $EFI_PARTITION"
 
 # Mount EFI partition
-mkdir -p /mnt/boot
 mount "$EFI_PARTITION" /mnt/boot
 
 # Install base system
