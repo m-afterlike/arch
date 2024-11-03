@@ -106,8 +106,8 @@ case "$CHOICE" in
         SBCTL_STATUS=$(sudo sbctl status)
         echo "$SBCTL_STATUS"
 
-        SETUP_MODE=$(echo "$SBCTL_STATUS" | grep "Setup Mode:" | awk '{print $3}')
-        SECURE_BOOT=$(echo "$SBCTL_STATUS" | grep "Secure Boot:" | awk '{print $3}')
+        SETUP_MODE=$(echo "$SBCTL_STATUS" | grep "Setup Mode:" | awk '{print $4}')
+        SECURE_BOOT=$(echo "$SBCTL_STATUS" | grep "Secure Boot:" | awk '{print $4}')
 
         if [[ "$SETUP_MODE" == "Enabled" && "$SECURE_BOOT" == "Disabled" ]]; then
             echo "System is in Setup Mode with Secure Boot disabled."
@@ -137,23 +137,32 @@ case "$CHOICE" in
 
         # Search for 'grubx64.efi' and 'vmlinuz-linux'
         echo "Detecting paths to sign..."
-        GRUB_EFI_PATH=$(sudo find /boot -name 'grubx64.efi' | head -n 1)
+        GRUBX64_EFI_PATH=$(sudo find /boot -name 'grubx64.efi' | head -n 1)
         VMLINUZ_PATH=$(sudo find /boot -name 'vmlinuz-linux' | head -n 1)
-
+        GRUB_EFI_PATH=$(sudo find /boot -name 'grub.efi' | head -n 1)
+        CORE_EFI_PATH=$(sudo find /boot -name 'core.efi' | head -n 1)
+        
         echo "Detected paths:"
-        echo "GRUB EFI: $GRUB_EFI_PATH"
+        echo "grubx64.efi: $GRUBX64_EFI_PATH"
         echo "vmlinuz-linux: $VMLINUZ_PATH"
+        echo "grub.efi: $GRUB_EFI_PATH"
+        echo "core.efi: $CORE_EFI_PATH"
 
         read -p "Do these paths look correct? (yes/no): " PATHS_CORRECT
         if [[ "$PATHS_CORRECT" != "yes" ]]; then
             echo "Please verify the paths and enter the correct paths."
-            echo "Enter the path to GRUB EFI (e.g., /boot/EFI/GRUB/grubx64.efi):"
-            read -p "> " GRUB_EFI_PATH
+            echo "Enter the path to grubx64.efi (e.g., /boot/EFI/GRUB/grubx64.efi):"
+            read -p "> " GRUBX64_EFI_PATH
             echo "Enter the path to vmlinuz-linux (e.g., /boot/vmlinuz-linux):"
             read -p "> " VMLINUZ_PATH
+            echo "Enter the path to grub.efi (e.g., /boot/vmlinuz-linux):"
+            read -p "> " GRUB_EFI_PATH
+            echo "Enter the path to core.efi (e.g., /boot/vmlinuz-linux):"
+            read -p "> " CORE_EFI_PATH
         fi
 
         # Sign the detected files
+        sudo sbctl sign-all
         sudo sbctl sign -s "$GRUB_EFI_PATH"
         sudo sbctl sign -s "$VMLINUZ_PATH"
 
@@ -169,6 +178,9 @@ case "$CHOICE" in
 
         # Run sbctl verify
         sudo sbctl verify
+
+        # Pause
+        read -p "Press Enter to continue..."
 
         # Rebuild initramfs
         sudo mkinitcpio -P
