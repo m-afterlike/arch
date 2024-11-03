@@ -90,7 +90,7 @@ echo "Available disks and partitions:"
 lsblk -p -o NAME,SIZE,FSTYPE,MOUNTPOINT
 
 # Prompt for the disk
-prompt "Enter the disk to install Arch Linux on (e.g., '/dev/sda')" DISK
+prompt "Enter the disk to install Arch Linux on (e.g., '/dev/sda' or '/dev/nvme0n1')" DISK
 
 # Confirm disk selection
 echo "You have selected $DISK"
@@ -115,8 +115,8 @@ echo "Current partition layout:"
 lsblk -p "$DISK"
 
 # Prompt for swap and root partition paths
-prompt "Enter the swap partition (e.g., '/dev/sda5')" SWAP_PARTITION
-prompt "Enter the root partition (e.g., '/dev/sda6')" ROOT_PARTITION
+prompt "Enter the swap partition (e.g., '/dev/sda5' or '/dev/nvme0n1p5')" SWAP_PARTITION
+prompt "Enter the root partition (e.g., '/dev/sda6' or '/dev/nvme0n1p6')" ROOT_PARTITION
 
 # Set up swap space
 echo "Setting up swap space..."
@@ -130,14 +130,22 @@ mkfs.ext4 -L "root" "$ROOT_PARTITION"
 mount "$ROOT_PARTITION" /mnt
 
 # Identify existing EFI partition
-EFI_PARTITION=$(lsblk -lp | grep -E "efi|boot" | grep "part" | awk '{print $1}' | head -n 1)
+echo "Attempting to detect EFI partition..."
+EFI_PARTITION=$(lsblk -lp | grep -E "PARTLABEL=\"EFI System Partition\"|PARTLABEL=\"EFI system partition\"|FSTYPE=\"vfat\"" | awk '{print $1}' | head -n 1)
 
 if [ -z "$EFI_PARTITION" ]; then
-    echo "EFI partition not found. Installation aborted."
-    exit 1
+    echo "EFI partition not found automatically."
+    echo "Please enter the EFI partition manually."
+    prompt "Enter the EFI partition (e.g., '/dev/sda1' or '/dev/nvme0n1p1')" EFI_PARTITION
 fi
 
-echo "EFI partition found at $EFI_PARTITION"
+# Confirm EFI partition
+echo "EFI partition selected: $EFI_PARTITION"
+prompt "Type 'yes' to confirm" CONFIRM_EFI
+if [ "$CONFIRM_EFI" != "yes" ]; then
+    echo "Installation aborted."
+    exit 1
+fi
 
 # Mount EFI partition
 mkdir -p /mnt/boot/efi
