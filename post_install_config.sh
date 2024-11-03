@@ -12,9 +12,10 @@ echo "3) Set up Secure Boot"
 echo "4) Enable os-prober (detect other OSes in GRUB)"
 echo "5) Disable os-prober"
 echo "6) Create user directories like ~/Desktop and ~/Music"
-echo "7) Exit"
+echo "7) Boot into UEFI Firmware Settings"
+echo "8) Exit"
 echo ""
-read -p "Enter your choice [1-7]: " CHOICE
+read -p "Enter your choice [1-8]: " CHOICE
 
 case "$CHOICE" in
     1)
@@ -31,6 +32,10 @@ case "$CHOICE" in
         ;;
     3)
         echo "Setting up Secure Boot..."
+        # Regenerate the GRUB EFI binary with required modules
+        echo "Regenerating GRUB EFI binary..."
+        sudo grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --modules="tpm" --disable-shim-lock
+
         # Check sbctl status
         SBCTL_STATUS=$(sudo sbctl status)
         echo "$SBCTL_STATUS"
@@ -64,52 +69,103 @@ case "$CHOICE" in
         # Pause
         read -p "Press Enter to continue..."
 
-        # Search for 'grubx64.efi' and 'vmlinuz-linux'
-        echo "Detecting paths to sign..."
-        GRUBX64_EFI_PATH=$(sudo find /boot -name 'grubx64.efi' | head -n 1)
-        VMLINUZ_PATH=$(sudo find /boot -name 'vmlinuz-linux' | head -n 1)
-        GRUB_EFI_PATH=$(sudo find /boot -name 'grub.efi' | head -n 1)
-        CORE_EFI_PATH=$(sudo find /boot -name 'core.efi' | head -n 1)
-        
-        echo "Detected paths:"
-        echo "grubx64.efi: $GRUBX64_EFI_PATH"
-        echo "vmlinuz-linux: $VMLINUZ_PATH"
-        echo "grub.efi: $GRUB_EFI_PATH"
-        echo "core.efi: $CORE_EFI_PATH"
+        # Detect EFI files excluding those under 'Microsoft' directories
+        echo "Detecting EFI files to sign..."
+        mapfile -t EFI_FILES < <(sudo find /boot -type f -name "*.efi" ! -path "*/Microsoft/*")
 
-        read -p "Do these paths look correct? (yes/no): " PATHS_CORRECT
-        if [[ "$PATHS_CORRECT" != "yes" ]]; then
-            echo "Please verify the paths and enter the correct paths."
-            echo "Enter the path to grubx64.efi (e.g., /boot/EFI/GRUB/grubx64.efi):"
-            read -p "> " GRUBX64_EFI_PATH
-            echo "Enter the path to vmlinuz-linux (e.g., /boot/vmlinuz-linux):"
-            read -p "> " VMLINUZ_PATH
-            echo "Enter the path to grub.efi (e.g., /boot/vmlinuz-linux):"
-            read -p "> " GRUB_EFI_PATH
-            echo "Enter the path to core.efi (e.g., /boot/vmlinuz-linux):"
-            read -p "> " CORE_EFI_PATH
-        fi
+        # Detect vmlinuz-linux and other kernels
+        KERNEL_IMAGES=($(sudo find /boot -type f -name "vmlinuz-linux*" -o -name "vmlinuz-linux-lts" -o -name "vmlinuz-linux-hardened" -o -name "vmlinuz-linux-zen"))
 
-        # Sign the detected files
-        sudo sbctl sign-all
-        sudo sbctl sign -s "$GRUB_EFI_PATH"
-        sudo sbctl sign -s "$VMLINUZ_PATH"
+        # Combine the files into a list
+        FILES_TO_SIGN=("${EFI_FILES[@]}" "${KERNEL_IMAGES[@]}")
 
-        # Ask if user wants to add more paths
-        read -p "Do you need to sign additional files? (yes/no): " ADD_FILES
-        if [[ "$ADD_FILES" == "yes" ]]; then
-            echo "Enter additional paths to sign, separated by spaces:"
-            read -p "> " ADDITIONAL_PATHS
-            for path in $ADDITIONAL_PATHS; do
-                sudo sbctl sign -s "$path"
+        # Remove empty entries
+        FILES_TO_SIGN=("${FILES_TO_SIGN[@]}")
+
+        # List the files with numbers
+        echo "Files detected for signing:"
+        i=1
+        for file in "${FILES_TO_SIGN[@]}"; do
+            echo "$i) $file"
+            ((i++))
+        done
+
+        # Ask if user wants to edit the list
+        read -p "Do you want to edit the list? (yes/no): " EDIT_LIST
+        if [[ "$EDIT_LIST" == "yes" ]]; then
+            while true; do
+                echo "Options:"
+                echo "1) Remove an entry"
+                echo "2) Add an entry"
+                echo "3) Proceed with current list"
+                read -p "Choose an option [1-3]: " EDIT_OPTION
+                case "$EDIT_OPTION" in
+                    1)
+                        read -p "Enter the number of the entry to remove: " REMOVE_NUM
+                        if [[ "$REMOVE_NUM" -gt 0 && "$REMOVE_NUM" -le "${#FILES_TO_SIGN[@]}" ]]; then
+                            unset 'FILES_TO_SIGN[REMOVE_NUM-1]'
+                            # Re-index the array
+                            FILES_TO_SIGN=("${FILES_TO_SIGN[@]}")
+                            # Re-list the files
+                            echo "Updated list:"
+                            i=1
+                            for file in "${FILES_TO_SIGN[@]}"; do
+                                echo "$i) $file"
+                                ((i++))
+                            done
+                        else
+                            echo "Invalid number."
+                        fi
+                        ;;
+                    2)
+                        read -p "Enter the full path of the file to add: " ADD_PATH
+                        if [[ -f "$ADD_PATH" ]]; then
+                            FILES_TO_SIGN+=("$ADD_PATH")
+                            # Re-list the files
+                            echo "Updated list:"
+                            i=1
+                            for file in "${FILES_TO_SIGN[@]}"; do
+                                echo "$i) $file"
+                                ((i++))
+                            done
+                        else
+                            echo "File does not exist."
+                        fi
+                        ;;
+                    3)
+                        break
+                        ;;
+                    *)
+                        echo "Invalid option."
+                        ;;
+                esac
             done
         fi
+
+        # Sign all files using sbctl
+        echo "Signing files..."
+        sudo sbctl sign-all
+        for file in "${FILES_TO_SIGN[@]}"; do
+            sudo sbctl sign -s "$file"
+        done
 
         # Run sbctl verify
         sudo sbctl verify
 
-        # Pause
-        read -p "Press Enter to continue..."
+        # Ask if user wants to proceed or add more paths
+        read -p "Do you need to sign additional files? (yes/no): " ADD_FILES
+        if [[ "$ADD_FILES" == "yes" ]]; then
+            while true; do
+                read -p "Enter the full path of the file to sign (or 'done' to finish): " EXTRA_PATH
+                if [[ "$EXTRA_PATH" == "done" ]]; then
+                    break
+                elif [[ -f "$EXTRA_PATH" ]]; then
+                    sudo sbctl sign -s "$EXTRA_PATH"
+                else
+                    echo "File does not exist."
+                fi
+            done
+        fi
 
         # Rebuild initramfs
         sudo mkinitcpio -P
@@ -161,6 +217,12 @@ case "$CHOICE" in
         echo "Directories were successfully created"
         ;;
     7)
+        # Boot into UEFI
+        echo "Rebooting now..."
+        sleep 5
+        sudo systemctl reboot --firmware-setup
+        ;;
+    8)
         echo "Exiting."
         ;;
     *)
