@@ -66,76 +66,110 @@ EOT
     # Grant sudo privileges to wheel group
     sed -i '/^# %wheel ALL=(ALL) ALL$/s/^# //' /etc/sudoers
 
-    # Create directory for scripts
-    mkdir -p /home/"$USERNAME"/install_arch_scripts
-    chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts
-
-    # Generate Secure Boot configuration script if desired
-    if [ "$GENERATE_SB_SCRIPT" == "yes" ]; then
-        cat <<EOSB > /home/"$USERNAME"/install_arch_scripts/configure_secure_boot.sh
+    # Generate post-install configuration script in user's home directory
+    cat <<'EOSCRIPT' > /home/"$USERNAME"/post_install_config.sh
 #!/bin/bash
 set -e
-# Verify you are in setup mode
-sudo sbctl status
 
-# Create custom Secure Boot keys
-sudo sbctl create-keys
+echo "-----------------------------------------------"
+echo "        Post-Install Configuration Script      "
+echo "-----------------------------------------------"
+echo ""
+echo "Please choose an option:"
+echo "1) Enable GRUB verbose logging"
+echo "2) Disable GRUB verbose logging"
+echo "3) Set up Secure Boot"
+echo "4) Enable os-prober (detect other OSes in GRUB)"
+echo "5) Disable os-prober"
+echo "6) Exit"
+echo ""
+read -p "Enter your choice [1-6]: " CHOICE
 
-# Enroll custom keys including Microsoft's certificates
-sudo sbctl enroll-keys -m
+case "\$CHOICE" in
+    1)
+        echo "Enabling GRUB verbose logging..."
+        sudo sed -i '/GRUB_CMDLINE_LINUX_DEFAULT/ s/"$/ debug"/' /etc/default/grub
+        sudo grub-mkconfig -o /boot/grub/grub.cfg
+        echo "GRUB verbose logging enabled."
+        ;;
+    2)
+        echo "Disabling GRUB verbose logging..."
+        sudo sed -i '/GRUB_CMDLINE_LINUX_DEFAULT/ s/ debug"/"/' /etc/default/grub
+        sudo grub-mkconfig -o /boot/grub/grub.cfg
+        echo "GRUB verbose logging disabled."
+        ;;
+    3)
+        echo "Setting up Secure Boot..."
+        # Verify you are in setup mode
+        sudo sbctl status
 
-# Verify key enrollment
-sudo sbctl status
+        # Create custom Secure Boot keys
+        sudo sbctl create-keys
 
-# Sign EFI binaries
-sudo sbctl sign -s /boot/EFI/GRUB/grubx64.efi
-sudo sbctl sign -s /boot/vmlinuz-linux
+        # Enroll custom keys including Microsoft's certificates
+        sudo sbctl enroll-keys -m
 
-# If NVIDIA drivers are installed, sign the modules
-if [ -d "/usr/lib/modules/\$(uname -r)/kernel/drivers/video" ]; then
-    sudo find /usr/lib/modules/\$(uname -r)/kernel/drivers/video -name "*.ko" -exec sbctl sign -s {} \;
-fi
+        # Verify key enrollment
+        sudo sbctl status
 
-# Rebuild initramfs
-sudo mkinitcpio -P
+        # Sign EFI binaries
+        sudo sbctl sign -s /boot/EFI/GRUB/grubx64.efi
+        sudo sbctl sign -s /boot/vmlinuz-linux
 
-# Regenerate GRUB configuration
-sudo grub-mkconfig -o /boot/grub/grub.cfg
+        # If NVIDIA drivers are installed, sign the modules
+        if [ -d "/usr/lib/modules/\$(uname -r)/kernel/drivers/video" ]; then
+            sudo find /usr/lib/modules/\$(uname -r)/kernel/drivers/video -name "*.ko" -exec sbctl sign -s {} \;
+        fi
 
-echo "Secure Boot configuration completed successfully."
-EOSB
-        chmod +x /home/"$USERNAME"/install_arch_scripts/configure_secure_boot.sh
-        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts/configure_secure_boot.sh
-    fi
+        # Rebuild initramfs
+        sudo mkinitcpio -P
 
-    # Generate scripts to enable/disable GRUB logs
-    if [ "$ENABLE_LOGGING" == "yes" ]; then
-        # Script to disable GRUB logs
-        cat <<EODISABLE > /home/"$USERNAME"/install_arch_scripts/disable_grub_logging.sh
-#!/bin/bash
-set -e
-sudo sed -i '/GRUB_CMDLINE_LINUX_DEFAULT/ s/ debug//' /etc/default/grub
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-echo "GRUB verbose logging disabled."
-EODISABLE
-        chmod +x /home/"$USERNAME"/install_arch_scripts/disable_grub_logging.sh
-        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts/disable_grub_logging.sh
+        # Regenerate GRUB configuration
+        sudo grub-mkconfig -o /boot/grub/grub.cfg
 
-        # Script to enable GRUB logs
-        cat <<EOENABLE > /home/"$USERNAME"/install_arch_scripts/enable_grub_logging.sh
-#!/bin/bash
-set -e
-sudo sed -i '/GRUB_CMDLINE_LINUX_DEFAULT/ s/"$/ debug"/' /etc/default/grub
-sudo grub-mkconfig -o /boot/grub/grub.cfg
-echo "GRUB verbose logging enabled."
-EOENABLE
-        chmod +x /home/"$USERNAME"/install_arch_scripts/enable_grub_logging.sh
-        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/install_arch_scripts/enable_grub_logging.sh
-    fi
+        echo "Secure Boot configuration completed successfully."
+        ;;
+    4)
+        echo "Enabling os-prober..."
+        # Install os-prober
+        sudo pacman -S --noconfirm os-prober
 
-    # Inform user about post-install scripts
-    echo "Post-install scripts have been generated in ~/install_arch_scripts."
-    echo "Please review and run them as needed after rebooting."
+        # Enable os-prober in GRUB configuration
+        echo "GRUB_DISABLE_OS_PROBER=false" | sudo tee -a /etc/default/grub
+
+        # Regenerate GRUB configuration
+        sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+        echo "os-prober enabled. GRUB will now detect other operating systems."
+        ;;
+    5)
+        echo "Disabling os-prober..."
+        # Remove or comment out the os-prober line in GRUB configuration
+        sudo sed -i '/GRUB_DISABLE_OS_PROBER=true/d' /etc/default/grub
+        sudo sed -i '/GRUB_DISABLE_OS_PROBER=false/d' /etc/default/grub
+        echo "GRUB_DISABLE_OS_PROBER=true" | sudo tee -a /etc/default/grub
+
+        # Regenerate GRUB configuration
+        sudo grub-mkconfig -o /boot/grub/grub.cfg
+
+        echo "os-prober disabled. GRUB will not detect other operating systems."
+        ;;
+    6)
+        echo "Exiting."
+        ;;
+    *)
+        echo "Invalid choice. Exiting."
+        ;;
+esac
+EOSCRIPT
+
+    # Make the script executable and set ownership
+    chmod +x /home/"$USERNAME"/post_install_config.sh
+    chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/post_install_config.sh
+
+    # Inform user about the post-install script
+    echo "A post-install configuration script has been generated in your home directory as 'post_install_config.sh'."
+    echo "You can run it after rebooting to perform additional configurations."
 }
 
 # Main script execution starts here
@@ -256,7 +290,6 @@ genfstab -U /mnt >> /mnt/etc/fstab
 prompt "Enter your username" USERNAME
 prompt "Do you want to install NVIDIA drivers? (yes/no)" INSTALL_NVIDIA
 prompt "Do you want to enable verbose logging in GRUB? (yes/no)" ENABLE_LOGGING
-prompt "Do you want to generate a Secure Boot configuration script? (yes/no)" GENERATE_SB_SCRIPT
 prompt "Enter any extra packages to install (space-separated, e.g., 'neovim git')" EXTRA_PACKAGES
 
 # Copy variables to chroot environment
@@ -266,7 +299,6 @@ echo "HOSTNAME='$HOSTNAME'" >> /mnt/root/install.conf
 echo "USERNAME='$USERNAME'" >> /mnt/root/install.conf
 echo "INSTALL_NVIDIA='$INSTALL_NVIDIA'" >> /mnt/root/install.conf
 echo "ENABLE_LOGGING='$ENABLE_LOGGING'" >> /mnt/root/install.conf
-echo "GENERATE_SB_SCRIPT='$GENERATE_SB_SCRIPT'" >> /mnt/root/install.conf
 echo "EXTRA_PACKAGES='$EXTRA_PACKAGES'" >> /mnt/root/install.conf
 
 # Copy functions to chroot environment
