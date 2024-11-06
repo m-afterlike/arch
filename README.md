@@ -7,9 +7,7 @@ A simple script for installing Arch Linux alongside Windows, with an additional 
 - **`archinstall.sh`**: A simple installation script for Arch Linux in a dual-boot configuration with Windows.
 - **`archutils.sh`**: A utility script for post-install configuration, including Secure Boot setup and other system utilities.
 
-## Instructions
-
-### Arch Install Script
+## Arch Install Script
 
 **Download and run the script**:
   ```bash
