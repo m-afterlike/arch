@@ -242,14 +242,14 @@ EOT
 
     # Generate post-install script if selected
     if [ "$GENERATE_POST_INSTALL_SCRIPT" == "yes" ]; then
-        curl -o /home/"$USERNAME"/post_install_config.sh https://raw.githubusercontent.com/m-afterlike/arch-install-script/main/post_install_config.sh
-        chmod +x /home/"$USERNAME"/post_install_config.sh
-        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/post_install_config.sh
+        curl -o /home/"$USERNAME"/archutils.sh https://raw.githubusercontent.com/m-afterlike/arch/main/archutils.sh
+        chmod +x /home/"$USERNAME"/archutils.sh
+        chown "$USERNAME":"$USERNAME" /home/"$USERNAME"/archutils.sh
     fi
 
     # Inform user about the post-install script
     if [ "$GENERATE_POST_INSTALL_SCRIPT" == "yes" ]; then
-        echo "A post-install configuration script has been downloaded to your home directory as 'post_install_config.sh'."
+        echo "A post-install configuration script has been downloaded to your home directory as 'archutils.sh'."
         echo "You can run it after rebooting to perform additional configurations."
     fi
 }
