@@ -40,5 +40,5 @@ A simple script for installing Arch Linux alongside Windows, with an additional 
 - Create User Directories: Sets up standard directories like `~/Desktop` and `~/Music`.
 - Boot into UEFI Firmware Settings: Restarts the system directly into UEFI.
 
-**Notes on Secure Boot**
+**Notes on Secure Boot**:
 The `archutils.sh` script uses `sbctl` to generate Secure Boot keys and sign EFI files. Run Secure Boot setup only if Secure Boot is disabled in UEFI firmware and in Setup Mode until keys are enrolled. Only proceed with Secure Boot setup if you understand custom key enrollment.
