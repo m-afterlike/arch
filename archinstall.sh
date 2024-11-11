@@ -15,6 +15,29 @@ install_packages() {
     done
 }
 
+# Function to prompt for BTRFS subvolumes
+prompt_subvolumes() {
+    echo "Subvolume '@' (root) will be created by default."
+    echo "Please select which additional BTRFS subvolumes you want to create:"
+    echo "1) @home for /home"
+    echo "2) @tmp for /tmp"
+    echo "3) @snapshots for /.snapshots"
+    echo "4) @var for /var"
+    echo "Enter the numbers of the subvolumes you want, separated by spaces (e.g., '1 3'):"
+    read -r SUBVOLUME_SELECTION
+    # Initialize SELECTED_SUBVOLUMES with '@'
+    SELECTED_SUBVOLUMES=("@")
+    for num in $SUBVOLUME_SELECTION; do
+        case $num in
+            1) SELECTED_SUBVOLUMES+=("@home") ;;
+            2) SELECTED_SUBVOLUMES+=("@tmp") ;;
+            3) SELECTED_SUBVOLUMES+=("@snapshots") ;;
+            4) SELECTED_SUBVOLUMES+=("@var") ;;
+            *) echo "Invalid selection: $num" ;;
+        esac
+    done
+}
+
 # Main script execution starts here
 
 # Prompt for initial configurations
@@ -29,6 +52,18 @@ prompt "Do you want to install NetworkManager? (yes/no)" INSTALL_NETWORKMANAGER
 prompt "Enter any extra packages to install (space-separated, e.g., 'neovim git')" EXTRA_PACKAGES
 prompt "Do you want to install GRUB for dual booting? (yes/no)" INSTALL_GRUB_DUALBOOT
 prompt "Do you want to generate the post-install script? (yes/no)" GENERATE_POST_INSTALL_SCRIPT
+prompt "Do you want to use BTRFS or ext4? (Enter 'btrfs' or 'ext4')" FILESYSTEM
+
+# Validate FILESYSTEM input
+if [[ "$FILESYSTEM" != "btrfs" && "$FILESYSTEM" != "ext4" ]]; then
+    echo "Invalid filesystem type. Please run the script again and enter 'btrfs' or 'ext4'."
+    exit 1
+fi
+
+# If BTRFS is chosen, prompt for subvolumes
+if [ "$FILESYSTEM" == "btrfs" ]; then
+    prompt_subvolumes
+fi
 
 # Set keyboard layout
 loadkeys us
@@ -108,9 +143,46 @@ swapon "$SWAP_PARTITION"
 free -m
 
 # Format and mount root partition
-echo "Formatting and mounting root partition..."
-mkfs.ext4 -L "root" "$ROOT_PARTITION"
-mount "$ROOT_PARTITION" /mnt
+if [ "$FILESYSTEM" == "btrfs" ]; then
+    echo "Formatting root partition as BTRFS..."
+    mkfs.btrfs -f -L "root" "$ROOT_PARTITION"
+    echo "Mounting root partition..."
+    mount "$ROOT_PARTITION" /mnt
+    echo "Creating BTRFS subvolumes..."
+    for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
+        btrfs subvolume create "/mnt/$subvol"
+    done
+    # Unmount root partition
+    umount /mnt
+    echo "Mounting BTRFS subvolumes..."
+    # Mount root subvolume
+    mount -o subvol=@ "$ROOT_PARTITION" /mnt
+    # Mount additional subvolumes
+    for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
+        case $subvol in
+            "@home")
+                mkdir -p /mnt/home
+                mount -o subvol=@home "$ROOT_PARTITION" /mnt/home
+                ;;
+            "@tmp")
+                mkdir -p /mnt/tmp
+                mount -o subvol=@tmp "$ROOT_PARTITION" /mnt/tmp
+                ;;
+            "@snapshots")
+                mkdir -p /mnt/.snapshots
+                mount -o subvol=@snapshots "$ROOT_PARTITION" /mnt/.snapshots
+                ;;
+            "@var")
+                mkdir -p /mnt/var
+                mount -o subvol=@var "$ROOT_PARTITION" /mnt/var
+                ;;
+        esac
+    done
+else
+    echo "Formatting and mounting root partition..."
+    mkfs.ext4 -L "root" "$ROOT_PARTITION"
+    mount "$ROOT_PARTITION" /mnt
+fi
 
 # Identify existing EFI partition
 EFI_PARTITION=$(lsblk -lp | grep -Ei "efi|boot" | grep "part" | awk '{print $1}' | head -n 1)
