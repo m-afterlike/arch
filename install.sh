@@ -349,12 +349,14 @@ userinfo_menu() {
 additional_options_menu() {
     print_ascii_art
     echo "Select additional options:"
-    options=("Install graphics drivers" "Enable verbose logging in GRUB" "Set up OpenSSH" "Install NetworkManager")
+    options=("Install graphics drivers" "Enable verbose logging in GRUB" "Set up OpenSSH" "Install NetworkManager" "Install extra packages")
     select_multiple_options "${options[@]}"
     INSTALL_GRAPHICS_DRIVERS="no"
     ENABLE_LOGGING="no"
     INSTALL_OPENSSH="no"
     INSTALL_NETWORKMANAGER="no"
+    INSTALL_EXTRA_PACKAGES="no"
+    EXTRA_PACKAGES=""
     for opt in "${SELECTED_OPTIONS[@]}"; do
         case $opt in
         "Install graphics drivers")
@@ -369,8 +371,15 @@ additional_options_menu() {
         "Install NetworkManager")
             INSTALL_NETWORKMANAGER="yes"
             ;;
+        "Install extra packages")
+            INSTALL_EXTRA_PACKAGES="yes"
+            ;;
         esac
     done
+    if [ "$INSTALL_EXTRA_PACKAGES" == "yes" ]; then
+        echo "Enter the packages you wish to install separated by spaces (e.g., fastfetch git neovim:"
+        read -r EXTRA_PACKAGES
+    fi
     secure_boot_menu
 }
 
@@ -568,13 +577,11 @@ EOF
         # Install NetworkManager if selected
         if [ "$INSTALL_NETWORKMANAGER" == "yes" ]; then
             PACKAGES="$PACKAGES networkmanager"
-            systemctl enable NetworkManager
         fi
 
         # Install OpenSSH if selected
         if [ "$INSTALL_OPENSSH" == "yes" ]; then
             PACKAGES="$PACKAGES openssh"
-            systemctl enable sshd
         fi
 
         # Install graphics drivers if desired
@@ -595,6 +602,16 @@ EOF
 
         # Install packages
         install_packages $PACKAGES
+
+        # Enable NetworkManager if selected
+        if [ "$INSTALL_NETWORKMANAGER" == "yes" ]; then
+            systemctl enable NetworkManager
+        fi
+
+        # Enable OpenSSH if selected
+        if [ "$INSTALL_OPENSSH" == "yes" ]; then
+            systemctl enable sshd
+        fi
 
         # Generate initramfs
         mkinitcpio -P
