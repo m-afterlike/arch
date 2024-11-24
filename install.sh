@@ -285,6 +285,7 @@ timezone_menu() {
 
 userinfo_menu() {
     print_ascii_art
+    unset USERNAME
     # Loop through user input until the user gives a valid username
     while true; do
         read -r -p "Please enter username: " USERNAME
