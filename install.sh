@@ -469,7 +469,7 @@ start_installation() {
         mkfs.fat -F32 "$EFI_PARTITION"
     else
         # For dual booting, find existing EFI partition
-        EFI_PARTITION=$(lsblk -lp | grep -Ei "efi|boot" | grep "part" | awk '{print $1}' | head -n 1)
+        EFI_PARTITION=$(blkid | grep -i 'TYPE="vfat"' | grep -i 'EFI' | awk -F: '{print $1}')
         if [ -z "$EFI_PARTITION" ]; then
             echo "EFI partition not found."
             echo "Available partitions:"
