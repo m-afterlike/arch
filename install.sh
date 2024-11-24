@@ -48,7 +48,7 @@ select_option() {
             if [ "$i" -eq $selected ]; then
                 echo -e "\e[7m ▶ ${options[$i]} \e[0m"
             else
-                echo "   ${options[$i]}"
+                echo "   ${options[$i]} "
             fi
         done
 
@@ -83,7 +83,7 @@ select_multiple_options() {
     local num_options=${#options[@]}
     local selected=0
     local last_selected=-1
-    local selections=()
+    declare -A selections  # Use an associative array for selections
 
     # Initialize selections array
     for ((i=0; i<num_options-1; i++)); do  # Exclude "Continue" from selections
@@ -104,7 +104,7 @@ select_multiple_options() {
         # Render the options
         for i in "${!options[@]}"; do
             if [ "$i" -lt $((num_options-1)) ]; then  # Regular options
-                if [ "${selections[$i]}" = true ]; then
+                if [ "${selections[$i]}" == true ]; then
                     prefix="[x]"
                 else
                     prefix="[ ]"
@@ -116,7 +116,7 @@ select_multiple_options() {
             if [ "$i" -eq $selected ]; then
                 echo -e "\e[7m ▶ $prefix ${options[$i]} \e[0m"
             else
-                echo "   $prefix ${options[$i]}"
+                echo "   $prefix ${options[$i]} "
             fi
         done
 
@@ -146,7 +146,11 @@ select_multiple_options() {
                 break
             else
                 # Toggle selection
-                selections[$selected]=$(! ${selections[$selected]})
+                if [ "${selections[$selected]}" == true ]; then
+                    selections[$selected]=false
+                else
+                    selections[$selected]=true
+                fi
             fi
             ;;
         esac
@@ -155,7 +159,7 @@ select_multiple_options() {
     # Gather selected options
     SELECTED_OPTIONS=()
     for ((i=0; i<num_options-1; i++)); do
-        if [ "${selections[$i]}" = true ]; then
+        if [ "${selections[$i]}" == true ]; then
             SELECTED_OPTIONS+=("${options[$i]}")
         fi
     done
