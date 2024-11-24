@@ -114,7 +114,7 @@ select_multiple_options() {
 
         read -rsn1 key
         case $key in
-        ' ')
+        '\x20')
             selections[$selected]=$(! ${selections[$selected]})
             ;;
         $'\x1b')
