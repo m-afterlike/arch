@@ -48,7 +48,7 @@ select_option() {
             if [ "$i" -eq $selected ]; then
                 echo -e "\e[7m ▶ ${options[$i]} \e[0m"
             else
-                echo "   ${options[$i]} "
+                echo "   ${options[$i]}"
             fi
         done
 
@@ -79,63 +79,82 @@ select_option() {
 # Modified select_option for multiple selections
 select_multiple_options() {
     local options=("$@")
+    options+=("Continue")  # Add "Continue" option at the end
     local num_options=${#options[@]}
     local selected=0
     local last_selected=-1
     local selections=()
 
     # Initialize selections array
-    for ((i=0; i<num_options; i++)); do
+    for ((i=0; i<num_options-1; i++)); do  # Exclude "Continue" from selections
         selections[$i]=false
     done
 
     while true; do
+        # Clear the screen and redraw the menu
         if [ $last_selected -ne -1 ]; then
             echo -ne "\033[${num_options}A"
         fi
 
         if [ $last_selected -eq -1 ]; then
-            echo "Please select options using the arrow keys and Space to toggle selection. Press Enter when done:"
+            echo "Please select options using the arrow keys and Enter to toggle selection."
+            echo "Select 'Continue' when you are done:"
         fi
+
+        # Render the options
         for i in "${!options[@]}"; do
-            if [ "${selections[$i]}" = true ]; then
-                prefix="[x]"
-            else
-                prefix="[ ]"
+            if [ "$i" -lt $((num_options-1)) ]; then  # Regular options
+                if [ "${selections[$i]}" = true ]; then
+                    prefix="[x]"
+                else
+                    prefix="[ ]"
+                fi
+            else  # "Continue" option
+                prefix="   "
             fi
+
             if [ "$i" -eq $selected ]; then
                 echo -e "\e[7m ▶ $prefix ${options[$i]} \e[0m"
             else
-                echo "   $prefix ${options[$i]} "
+                echo "   $prefix ${options[$i]}"
             fi
         done
 
         last_selected=$selected
 
+        # Read a single keypress
         read -rsn1 key
-        case $key in
-        '\x20')
-            selections[$selected]=$(! ${selections[$selected]})
-            ;;
-        $'\x1b')
+
+        # Handle keypress
+        case "$key" in
+        $'\x1b')  # Arrow keys
             read -rsn2 -t 0.1 key
-            case $key in
-            '[A')
+            case "$key" in
+            '[A')  # Up arrow
                 ((selected--))
                 [ $selected -lt 0 ] && selected=$((num_options - 1))
                 ;;
-            '[B')
+            '[B')  # Down arrow
                 ((selected++))
                 [ $selected -ge $num_options ] && selected=0
                 ;;
             esac
             ;;
-        '') break ;;
+        '')  # Enter key
+            if [ "$selected" -eq $((num_options - 1)) ]; then
+                # "Continue" selected
+                break
+            else
+                # Toggle selection
+                selections[$selected]=$(! ${selections[$selected]})
+            fi
+            ;;
         esac
     done
 
+    # Gather selected options
     SELECTED_OPTIONS=()
-    for i in "${!options[@]}"; do
+    for ((i=0; i<num_options-1; i++)); do
         if [ "${selections[$i]}" = true ]; then
             SELECTED_OPTIONS+=("${options[$i]}")
         fi
@@ -289,10 +308,12 @@ userinfo_menu() {
     # Loop through user input until the user gives a valid username
     while true; do
         read -r -p "Please enter username: " USERNAME
-        if [[ "${USERNAME,,}" =~ ^[a-z_]([a-z0-9_-]{0,31}|[a-z0-9_-]{0,30}\$)$ ]]; then
+        if [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+            echo "Username accepted: $USERNAME"
             break
+        else
+            echo "Incorrect username. Only lowercase letters, numbers, '_', and '-' are allowed, and must start with a letter."
         fi
-        echo "Incorrect username."
     done
 
     while true; do
@@ -308,16 +329,14 @@ userinfo_menu() {
         fi
     done
 
-    # Loop through user input until the user gives a valid hostname, but allow the user to force save
+    # Loop through user input until the user gives a valid hostname
     while true; do
-        read -r -p "Please name your machine: " HOSTNAME
-        if [[ "${HOSTNAME,,}" =~ ^[a-z][a-z0-9_.-]{0,62}[a-z0-9]$ ]]; then
+        read -r -p "Please name your machine (hostname): " HOSTNAME
+        if [[ "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+            echo "Hostname accepted: $HOSTNAME"
             break
-        fi
-        # if validation fails allow the user to force saving of the hostname
-        read -r -p "Hostname doesn't seem correct. Do you still want to save it? (y/n): " force
-        if [[ "${force,,}" = "y" ]]; then
-            break
+        else
+            echo "Incorrect hostname. Only letters, numbers, '_', '-', and '.' are allowed, and must start with a letter or number."
         fi
     done
     additional_options_menu
@@ -469,12 +488,12 @@ start_installation() {
             btrfs subvolume create "/mnt/$subvol_name"
         done
         umount /mnt
-        mount -o subvol=@ "$ROOT_PARTITION" /mnt
+        mount -o subvol=@,compress=zstd "$ROOT_PARTITION" /mnt
         for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
             subvol_name=$(echo "$subvol" | awk '{print $1}')
             mount_point=$(echo "$subvol" | awk '{print $3}')
             mkdir -p "/mnt$mount_point"
-            mount -o subvol="$subvol_name" "$ROOT_PARTITION" "/mnt$mount_point"
+            mount -o subvol="$subvol_name",compress=zstd "$ROOT_PARTITION" "/mnt$mount_point"
         done
     else
         mkfs.ext4 "$ROOT_PARTITION"
@@ -564,7 +583,7 @@ EOF
             elif echo "${gpu_type}" | grep 'VGA' | grep -E "Radeon|AMD"; then
                 PACKAGES="$PACKAGES xf86-video-amdgpu"
             elif echo "${gpu_type}" | grep -E "Integrated Graphics Controller|Intel Corporation UHD"; then
-                PACKAGES="$PACKAGES libva-intel-driver libvdpau-va-gl lib32-vulkan-intel vulkan-intel libva-utils lib32-mesa"
+                PACKAGES="$PACKAGES mesa xf86-video-intel vulkan-intel libva-intel-driver libva-utils lib32-mesa"
             else
                 echo "No compatible GPU detected. Skipping graphics drivers installation."
             fi
