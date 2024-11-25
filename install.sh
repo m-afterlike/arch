@@ -274,7 +274,7 @@ swap_size_menu() {
         ;;
     1)
         echo "Enter desired swap size in GB (e.g., 4G):"
-        read -r SWAP_SIZE
+        read -r SWAP_SIZE < /dev/tty
         timezone_menu
         ;;
     esac
@@ -286,7 +286,7 @@ timezone_menu() {
     if [ -z "$time_zone" ]; then
         echo "Unable to detect timezone."
         echo "Please enter your desired timezone (e.g., America/New_York):"
-        read -r TIMEZONE
+        read -r TIMEZONE < /dev/tty
     else
         echo "System detected your timezone to be '$time_zone'"
         echo "Is this correct?"
@@ -299,7 +299,7 @@ timezone_menu() {
             ;;
         1)
             echo "Please enter your desired timezone (e.g., America/New_York):"
-            read -r TIMEZONE
+            read -r TIMEZONE < /dev/tty
             ;;
         esac
     fi
@@ -311,7 +311,7 @@ userinfo_menu() {
     unset USERNAME
     # Loop through user input until the user gives a valid username
     while true; do
-        read -r -p "Please enter username: " USERNAME
+        read -r -p "Please enter username: " USERNAME < /dev/tty
         if [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
             echo "Username accepted: $USERNAME"
             break
@@ -321,9 +321,9 @@ userinfo_menu() {
     done
 
     while true; do
-        read -rs -p "Please enter password: " PASSWORD1
+        read -rs -p "Please enter password: " PASSWORD1 < /dev/tty
         echo -ne "\n"
-        read -rs -p "Please re-enter password: " PASSWORD2
+        read -rs -p "Please re-enter password: " PASSWORD2 < /dev/tty
         echo -ne "\n"
         if [[ "$PASSWORD1" == "$PASSWORD2" ]]; then
             PASSWORD=$PASSWORD1
@@ -335,7 +335,7 @@ userinfo_menu() {
 
     # Loop through user input until the user gives a valid hostname
     while true; do
-        read -r -p "Please name your machine (hostname): " HOSTNAME
+        read -r -p "Please name your machine (hostname): " HOSTNAME < /dev/tty
         if [[ "$HOSTNAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
             echo "Hostname accepted: $HOSTNAME"
             break
@@ -378,7 +378,7 @@ additional_options_menu() {
     done
     if [ "$INSTALL_EXTRA_PACKAGES" == "yes" ]; then
         echo "Enter the packages you wish to install separated by spaces (e.g., fastfetch git neovim:"
-        read -r EXTRA_PACKAGES
+        read -r EXTRA_PACKAGES < /dev/tty
     fi
     secure_boot_menu
 }
@@ -475,7 +475,7 @@ start_installation() {
             echo "Available partitions:"
             lsblk -p -o NAME,SIZE,FSTYPE,MOUNTPOINT
             echo "Please enter the EFI partition (e.g., '/dev/nvme0n1p1'):"
-            read -r EFI_PARTITION
+            read -r EFI_PARTITION < /dev/tty
         fi
 
         # Create partitions
