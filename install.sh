@@ -560,7 +560,7 @@ start_installation() {
     mount "$EFI_PARTITION" /mnt/boot
 
     # Install base system
-    install_packages base linux linux-firmware --root /mnt
+    pacstrap /mnt base linux linux-firmware
 
     # Generate fstab
     genfstab -U /mnt >> /mnt/etc/fstab
