@@ -601,6 +601,10 @@ EOF
         fi
 
         # Install packages
+        if [ -n "$EXTRA_PACKAGES" ]; then
+            PACKAGES="$PACKAGES $EXTRA_PACKAGES"
+        fi
+
         install_packages $PACKAGES
 
         # Enable NetworkManager if selected
@@ -610,6 +614,7 @@ EOF
 
         # Enable OpenSSH if selected
         if [ "$INSTALL_OPENSSH" == "yes" ]; then
+            sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
             systemctl enable sshd
         fi
 
@@ -626,6 +631,12 @@ EOF
         # Modify GRUB for verbose logging if desired
         if [ "$ENABLE_LOGGING" == "yes" ]; then
             sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ debug"/' /etc/default/grub
+        fi
+
+        # Add os-prober to GRUB
+        if [ "$DUAL_BOOT" == "yes" ]; then
+            pacman -S --noconfirm os-prober
+            sed -i 's/^#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub
         fi
 
         # Generate GRUB configuration
