@@ -270,6 +270,61 @@ install_oh_my_zsh() {
 # SYSTEM SETUP FUNCTIONS
 # ============================================
 
+setup_audio() {
+    sudo -v
+    clear
+    print_ascii_art
+    echo "Setting up audio on your system."
+    echo "You can choose between PipeWire (recommended) or PulseAudio."
+    echo ""
+    echo "Which audio system would you like to set up?"
+    options=("PipeWire (recommended)" "PulseAudio" "Cancel")
+    select_option "${options[@]}"
+    selected=$?
+
+    case $selected in
+    0)  # PipeWire setup
+        echo "Installing and configuring PipeWire..."
+        run_with_status "Installing PipeWire and related packages" "
+            install_packages pipewire pipewire-alsa pipewire-pulse pipewire-jack
+            install_packages wireplumber
+        "
+        run_with_status "Enabling PipeWire services" "
+            systemctl --user enable --now pipewire pipewire-pulse wireplumber
+        "
+        ;;
+    1)  # PulseAudio setup
+        echo "Installing and configuring PulseAudio..."
+        run_with_status "Installing PulseAudio and related packages" "
+            install_packages pulseaudio pulseaudio-alsa pulseaudio-jack pulseaudio-equalizer pulseaudio-bluetooth
+        "
+        run_with_status "Enabling PulseAudio service" "
+            systemctl --user enable --now pulseaudio
+        "
+        ;;
+    2)  # Cancel
+        echo "Audio setup canceled."
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+        ;;
+    esac
+
+    echo ""
+    echo "Do you want to install Pavucontrol (GUI for managing audio)?"
+    options=("Yes" "No")
+    select_option "${options[@]}"
+    selected=$?
+
+    if [[ $selected -eq 0 ]]; then
+        run_with_status "Installing Pavucontrol" "install_packages pavucontrol"
+    fi
+
+    echo -e "\n\e[32m✔ Audio setup is complete. You can manage audio using pavucontrol or system tools.\e[0m"
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
+}
+
 setup_secure_boot() {
     sudo -v
     clear
@@ -612,6 +667,7 @@ system_setup_menu() {
         "Setup Secure Boot"
         "Create User Directories"
         "Setup Getty Autologin"
+        "Set Up Audio"
         "Back"
     )
     select_option "${options[@]}"
@@ -620,7 +676,8 @@ system_setup_menu() {
     0) setup_secure_boot ;;
     1) create_user_directories ;;
     2) setup_getty_autologin ;;
-    3) main_menu ;;
+    3) setup_audio ;;
+    4) main_menu ;;
     esac
 }
 
