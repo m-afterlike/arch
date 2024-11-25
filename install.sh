@@ -54,10 +54,10 @@ select_option() {
 
         last_selected=$selected
 
-        read -rsn1 key
+        read -rsn1 key < /dev/tty
         case $key in
         $'\x1b')
-            read -rsn2 -t 0.1 key
+            read -rsn2 -t 0.1 key < /dev/tty
             case $key in
             '[A')
                 ((selected--))
@@ -123,12 +123,12 @@ select_multiple_options() {
         last_selected=$selected
 
         # Read a single keypress
-        read -rsn1 key
+        read -rsn1 key < /dev/tty
 
         # Handle keypress
         case "$key" in
         $'\x1b')  # Arrow keys
-            read -rsn2 -t 0.1 key
+            read -rsn2 -t 0.1 key < /dev/tty
             case "$key" in
             '[A')  # Up arrow
                 ((selected--))
