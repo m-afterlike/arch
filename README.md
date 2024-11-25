@@ -11,7 +11,7 @@ A simple script for installing Arch Linux alongside Windows, with an additional 
 
 **Curl and run the script**:
   ```bash
-  curl -fsSL https://afterlike.org/install.sh | bash
+  curl -fsSL https://afterlike.org/arch | bash
   ```
 
 **The script will guide you through**:
