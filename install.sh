@@ -485,9 +485,19 @@ start_installation() {
         parted -s "$DISK" mkpart primary linux-swap 1MiB "${SWAP_SIZE}"
         parted -s "$DISK" mkpart primary ext4 "${SWAP_SIZE}" 100%
 
+        get_partition_suffix() {
+            if [[ "$DISK" =~ "nvme" ]]; then
+                echo "p"
+            else
+                echo ""
+            fi
+        }
+        PART_SUFFIX=$(get_partition_suffix)
+    
         # Get partition names
-        SWAP_PARTITION="${DISK}1"
-        ROOT_PARTITION="${DISK}2"
+        EFI_PARTITION="${DISK}${PART_SUFFIX}1"
+        SWAP_PARTITION="${DISK}${PART_SUFFIX}2"
+        ROOT_PARTITION="${DISK}${PART_SUFFIX}3"
     fi
 
     # Set up swap
