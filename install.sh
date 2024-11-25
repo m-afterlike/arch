@@ -436,9 +436,6 @@ confirm_settings() {
         ;;
     esac
 }
-#!/bin/bash
-
-# ... [Previous code remains unchanged] ...
 
 start_installation() {
     print_ascii_art
@@ -456,21 +453,23 @@ start_installation() {
     # Unmount any mounted partitions on /mnt
     umount -A --recursive /mnt || true
 
+    # Function to detect EFI partition using lsblk
+    detect_efi_partition() {
+        lsblk -lnpo NAME,FSTYPE,PARTLABEL | while read -r line; do
+            name=$(echo "$line" | awk '{print $1}')
+            fstype=$(echo "$line" | awk '{print $2}')
+            partlabel=$(echo "$line" | awk '{print $3}')
+            if [[ "$fstype" == "vfat" ]] && [[ "$partlabel" == *"EFI"* ]]; then
+                echo "$name"
+                return 0
+            fi
+        done
+        return 1
+    }
+
     if [ "$DUAL_BOOT" == "yes" ]; then
         # For dual booting, find existing EFI partition on any disk
-        EFI_PARTITION=$(lsblk -lnpo NAME,FSTYPE,PARTLABEL | grep -i 'FSTYPE="vfat"' | grep -Ei 'PARTLABEL="(EFI|ESP|SYSTEM)"' | awk '{print $1}' | head -n1)
-        
-        # If not found, try to identify using partition type GUID (EF00)
-        if [ -z "$EFI_PARTITION" ]; then
-            EFI_PARTITION=$(blkid -t PARTUUID -o device | while read -r device; do
-                part_type=$(sgdisk -i "$(lsblk -no PARTNUM "$device")" "$(lsblk -no PKNAME "$device")" | grep 'Partition GUID code' | awk '{print $4}')
-                if [ "$part_type" == "EF00" ]; then
-                    echo "$device"
-                    break
-                fi
-            done)
-        fi
-
+        EFI_PARTITION=$(detect_efi_partition)
         if [ -z "$EFI_PARTITION" ]; then
             echo "EFI partition not found."
             echo "Available partitions:"
@@ -479,6 +478,22 @@ start_installation() {
             read -r EFI_PARTITION < /dev/tty
         else
             echo "Found EFI partition: $EFI_PARTITION"
+        fi
+
+        # On the selected disk, zap all partitions except EFI partition if present
+        EFI_PARTITION_ON_DISK=$(lsblk -lnpo NAME,FSTYPE,PARTLABEL "$DISK" | grep -i 'vfat' | grep -i 'EFI' | awk '{print $1}')
+        if [ -n "$EFI_PARTITION_ON_DISK" ]; then
+            echo "EFI partition found on $DISK ($EFI_PARTITION_ON_DISK). Preserving EFI partition and deleting other partitions."
+            # Delete all other partitions on the disk
+            OTHER_PARTITIONS=$(lsblk -lnpo NAME "$DISK" | grep -v "$EFI_PARTITION_ON_DISK")
+            for partition in $OTHER_PARTITIONS; do
+                wipefs -a "$partition"
+                PART_NUM=$(lsblk -no PARTNUM "$partition")
+                sgdisk --delete "$PART_NUM" "$DISK"
+            done
+        else
+            echo "No EFI partition found on $DISK. Wiping the disk."
+            sgdisk --zap-all "$DISK"
         fi
 
         # Create swap and root partitions on selected disk
@@ -499,44 +514,13 @@ start_installation() {
 
     else
         # Not dual booting
-        # Check if EFI partition exists on selected disk
-        EFI_PARTITION_ON_DISK=$(lsblk -lnpo NAME,FSTYPE,PARTLABEL "$DISK" | grep -i 'FSTYPE="vfat"' | grep -Ei 'PARTLABEL="(EFI|ESP|SYSTEM)"' | awk '{print $1}')
+        sgdisk --zap-all "$DISK"
+
+        # Create EFI partition
+        sgdisk -n1:1MiB:+512MiB -t1:EF00 -c1:"EFI System Partition" "$DISK"
+        EFI_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "EFI System Partition" | awk '{print $1}')
+        mkfs.fat -F32 "$EFI_PARTITION"
         
-        # If not found, check for partition type GUID (EF00)
-        if [ -z "$EFI_PARTITION_ON_DISK" ]; then
-            EFI_PARTITION_ON_DISK=$(blkid -t PARTUUID -o device | while read -r device; do
-                if [ "$(lsblk -no PKNAME "$device")" == "${DISK##*/}" ]; then
-                    part_type=$(sgdisk -i "$(lsblk -no PARTNUM "$device")" "$DISK" | grep 'Partition GUID code' | awk '{print $4}')
-                    if [ "$part_type" == "EF00" ]; then
-                        echo "$device"
-                        break
-                    fi
-                fi
-            done)
-        fi
-
-        if [ -n "$EFI_PARTITION_ON_DISK" ]; then
-            # EFI partition exists on selected disk
-            EFI_PARTITION="$EFI_PARTITION_ON_DISK"
-            echo "EFI partition found on $DISK ($EFI_PARTITION). Preserving EFI partition and deleting other partitions."
-            # Delete all other partitions
-            OTHER_PARTITIONS=$(lsblk -lnpo NAME "$DISK" | grep -v "$EFI_PARTITION")
-            for partition in $OTHER_PARTITIONS; do
-                wipefs -a "$partition"
-                PART_NUM=$(lsblk -no PARTNUM "$partition")
-                sgdisk --delete "$PART_NUM" "$DISK"
-            done
-        else
-            # No EFI partition on selected disk
-            echo "No EFI partition found on $DISK. Wiping the disk and creating new EFI partition."
-            sgdisk --zap-all "$DISK"
-
-            # Create EFI partition
-            sgdisk -n1:1MiB:+512MiB -t1:EF00 -c1:"EFI System Partition" "$DISK"
-            EFI_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "EFI System Partition" | awk '{print $1}')
-            mkfs.fat -F32 "$EFI_PARTITION"
-        fi
-
         # Create swap partition
         sgdisk -n0:0:+${SWAP_SIZE} -t0:8200 -c0:"Linux Swap" "$DISK"
 
