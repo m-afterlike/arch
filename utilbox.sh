@@ -78,7 +78,7 @@ select_multiple_options() {
     declare -A selections  # Use an associative array for selections
 
     # Initialize selections array
-    for ((i=0; i<num_options-1; i++)); do  # Exclude "Continue" from selections
+    for ((i=0; i<num_options-2; i++)); do  # Exclude "Add Custom File" and "Continue" from selections
         selections[$i]=true  # Default to all selected
     done
 
@@ -91,14 +91,14 @@ select_multiple_options() {
 
         # Render the options
         for i in "${!options[@]}"; do
-            if [ "$i" -lt $((num_options-1)) ]; then  # Regular options
+            if [ "$i" -lt $((num_options-2)) ]; then  # Regular file options
                 if [ "${selections[$i]}" == true ]; then
                     prefix="[x]"
                 else
                     prefix="[ ]"
                 fi
-            else  # "Continue" option
-                prefix="   "
+            elif [ "${options[$i]}" == "Add Custom File" ] || [ "${options[$i]}" == "Continue" ]; then
+                prefix="   "  # No checkbox for "Add Custom File" or "Continue"
             fi
 
             if [ "$i" -eq $selected ]; then
@@ -137,7 +137,7 @@ select_multiple_options() {
                 read -r custom_file < /dev/tty
                 if [ -f "$custom_file" ]; then
                     options=("${options[@]:0:${#options[@]}-2}" "$custom_file" "${options[@]: -2}")
-                    selections[$((num_options-1))]=true
+                    selections[$((num_options-2))]=true  # Automatically select the new file
                     ((num_options++))
                 else
                     error_message "File not found: $custom_file"
@@ -156,7 +156,7 @@ select_multiple_options() {
 
     # Gather selected options
     SELECTED_FILES=()
-    for ((i=0; i<num_options-1; i++)); do
+    for ((i=0; i<num_options-2; i++)); do
         if [ "${selections[$i]}" == true ]; then
             SELECTED_FILES+=("${options[$i]}")
         fi
