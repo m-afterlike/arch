@@ -14,7 +14,7 @@ print_ascii_art() {
 ██║   ██║   ██║   ██║██║     ██╔══██╗██║   ██║ ██╔██╗ 
 ╚██████╔╝   ██║   ██║███████╗██████╔╝╚██████╔╝██╔╝ ██╗
  ╚═════╝    ╚═╝   ╚═╝╚══════╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
-                                                      
+                                                        
 
 EOF
 }
@@ -69,6 +69,100 @@ select_option() {
     return $selected
 }
 
+select_multiple_options() {
+    local options=("$@")
+    options+=("Continue")  # Add "Continue" option at the end
+    local num_options=${#options[@]}
+    local selected=0
+    local last_selected=-1
+    declare -A selections  # Use an associative array for selections
+
+    # Initialize selections array
+    for ((i=0; i<num_options-1; i++)); do  # Exclude "Continue" from selections
+        selections[$i]=true  # Default to all selected
+    done
+
+    while true; do
+        # Clear the screen and redraw the menu
+        clear
+        print_ascii_art
+        echo "Select files to sign:"
+        echo "Use arrow keys to navigate, Enter to select/deselect, and choose 'Continue' when done."
+
+        # Render the options
+        for i in "${!options[@]}"; do
+            if [ "$i" -lt $((num_options-1)) ]; then  # Regular options
+                if [ "${selections[$i]}" == true ]; then
+                    prefix="[x]"
+                else
+                    prefix="[ ]"
+                fi
+            else  # "Continue" option
+                prefix="   "
+            fi
+
+            if [ "$i" -eq $selected ]; then
+                echo -e "\e[7m ▶ $prefix ${options[$i]} \e[0m"
+            else
+                echo "   $prefix ${options[$i]} "
+            fi
+        done
+
+        last_selected=$selected
+
+        # Read a single keypress
+        read -rsn1 key < /dev/tty
+
+        # Handle keypress
+        case "$key" in
+        $'\x1b')  # Arrow keys
+            read -rsn2 -t 0.1 key < /dev/tty
+            case "$key" in
+            '[A')  # Up arrow
+                ((selected--))
+                [ $selected -lt 0 ] && selected=$((num_options - 1))
+                ;;
+            '[B')  # Down arrow
+                ((selected++))
+                [ $selected -ge $num_options ] && selected=0
+                ;;
+            esac
+            ;;
+        '')  # Enter key
+            if [ "$selected" -eq $((num_options - 1)) ]; then
+                # "Continue" selected
+                break
+            elif [ "${options[$selected]}" == "Add Custom File" ]; then
+                echo "Enter the full path of the custom file to sign:"
+                read -r custom_file < /dev/tty
+                if [ -f "$custom_file" ]; then
+                    options=("${options[@]:0:${#options[@]}-2}" "$custom_file" "${options[@]: -2}")
+                    selections[$((num_options-1))]=true
+                    ((num_options++))
+                else
+                    error_message "File not found: $custom_file"
+                fi
+            else
+                # Toggle selection
+                if [ "${selections[$selected]}" == true ]; then
+                    selections[$selected]=false
+                else
+                    selections[$selected]=true
+                fi
+            fi
+            ;;
+        esac
+    done
+
+    # Gather selected options
+    SELECTED_FILES=()
+    for ((i=0; i<num_options-1; i++)); do
+        if [ "${selections[$i]}" == true ]; then
+            SELECTED_FILES+=("${options[$i]}")
+        fi
+    done
+}
+
 run_with_status() {
     local task_name="$1"
     shift
@@ -110,8 +204,8 @@ install_rofi() {
 }
 
 install_yay() {
+    sudo -v
     run_with_status "Installing Yay AUR Helper" "
-        sudo -v &&
         install_packages base-devel git &&
         cd \$HOME &&
         git clone https://aur.archlinux.org/yay.git &&
@@ -125,8 +219,8 @@ install_yay() {
 }
 
 install_paru() {
+    sudo -v
     run_with_status "Installing Paru AUR Helper" "
-        sudo -v &&
         install_packages base-devel git &&
         cd \$HOME &&
         git clone https://aur.archlinux.org/paru.git &&
@@ -140,9 +234,11 @@ install_paru() {
 }
 
 install_oh_my_zsh() {
+    sudo -v
     clear
     print_ascii_art
     echo "Installing Oh My Zsh..."
+
     if ! run_with_status "Installing Zsh" "install_packages zsh"; then
         read -p "Press Enter to return to the main menu..." </dev/tty
         main_menu
@@ -150,7 +246,7 @@ install_oh_my_zsh() {
     fi
 
     echo "Changing default shell to Zsh for current user..."
-    if ! chsh -s "$(which zsh)"; then
+    if ! run_with_status "Changing default shell" "sudo chsh -s $(which zsh) $USER"; then
         error_message "Failed to change default shell."
         read -p "Press Enter to return to the main menu..." </dev/tty
         main_menu
@@ -158,7 +254,7 @@ install_oh_my_zsh() {
     fi
 
     echo "Installing Oh My Zsh..."
-    if ! sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"; then
+    if ! run_with_status "Installing Oh My Zsh" 'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"'; then
         error_message "Failed to install Oh My Zsh."
         read -p "Press Enter to return to the main menu..." </dev/tty
         main_menu
@@ -175,6 +271,7 @@ install_oh_my_zsh() {
 # ============================================
 
 setup_secure_boot() {
+    sudo -v
     clear
     print_ascii_art
     echo "Setting up Secure Boot..."
@@ -242,13 +339,13 @@ setup_secure_boot() {
     KERNEL_IMAGES=($(sudo find /boot -type f -name "vmlinuz-linux*" -o -name "vmlinuz-linux-lts" -o -name "vmlinuz-linux-hardened" -o -name "vmlinuz-linux-zen"))
 
     # Combine files to sign
-    FILES_TO_SIGN=("${EFI_FILES[@]}" "${KERNEL_IMAGES[@]}")
+    FILES_TO_SIGN=("${EFI_FILES[@]}" "${KERNEL_IMAGES[@]}" "Add Custom File")
 
     # Remove empty entries
     FILES_TO_SIGN=("${FILES_TO_SIGN[@]}")
 
     # Allow user to select files to sign
-    select_files_to_sign
+    select_multiple_options "${FILES_TO_SIGN[@]}"
 
     # Auto sign all files first
     if ! run_with_status "Auto-signing all EFI binaries" "sudo sbctl sign-all"; then
@@ -258,17 +355,17 @@ setup_secure_boot() {
     fi
 
     # Manually sign selected files
-    for file in "${FILES_TO_SIGN[@]}"; do
-        if ! run_with_status "Signing $file" "sudo sbctl sign -s \"$file\""; then
-            echo "Failed to sign $file. Continuing with next file."
+    for file in "${SELECTED_FILES[@]}"; do
+        if [ "$file" != "Add Custom File" ]; then
+            if ! run_with_status "Signing $file" "sudo sbctl sign -s \"$file\""; then
+                echo "Failed to sign $file. Continuing with next file."
+            fi
         fi
     done
 
     # Rebuild initramfs
-    if ! run_with_status "Rebuilding initramfs" "sudo mkinitcpio -P"; then
-        read -p "Press Enter to return to the main menu..." </dev/tty
-        main_menu
-        return
+    if ! run_with_status "Rebuilding initramfs" "sudo mkinitcpio -P || true"; then
+        echo "Continuing despite mkinitcpio exit code."
     fi
 
     # Regenerate GRUB configuration
@@ -296,52 +393,8 @@ setup_secure_boot() {
     esac
 }
 
-select_files_to_sign() {
-    print_ascii_art
-    echo "Select files to sign:"
-    options=("${FILES_TO_SIGN[@]}" "Add Custom File" "Continue")
-    selections=("${FILES_TO_SIGN[@]}")
-    while true; do
-        echo "Current selections:"
-        for i in "${!options[@]}"; do
-            if [[ " ${selections[@]} " =~ " ${options[$i]} " ]]; then
-                prefix="[x]"
-            else
-                prefix="[ ]"
-            fi
-            echo "$prefix ${options[$i]}"
-        done
-        echo ""
-        select_option "${options[@]}"
-        selected=$?
-        if [ "${options[$selected]}" == "Continue" ]; then
-            break
-        elif [ "${options[$selected]}" == "Add Custom File" ]; then
-            echo "Enter the full path of the custom file to sign:"
-            read -r custom_file < /dev/tty
-            if [ -f "$custom_file" ]; then
-                FILES_TO_SIGN+=("$custom_file")
-                options=("${FILES_TO_SIGN[@]}" "Add Custom File" "Continue")
-                selections+=("$custom_file")
-            else
-                error_message "File not found: $custom_file"
-            fi
-        else
-            # Toggle selection
-            if [[ " ${selections[@]} " =~ " ${options[$selected]} " ]]; then
-                # Remove from selections
-                selections=("${selections[@]/${options[$selected]}}")
-            else
-                # Add to selections
-                selections+=("${options[$selected]}")
-            fi
-        fi
-    done
-
-    FILES_TO_SIGN=("${selections[@]}")
-}
-
 create_user_directories() {
+    sudo -v
     run_with_status "Creating user directories" "
         install_packages xdg-user-dirs &&
         xdg-user-dirs-update
@@ -351,6 +404,7 @@ create_user_directories() {
 }
 
 setup_getty_autologin() {
+    sudo -v
     print_ascii_art
     echo "WARNING: Setting up Getty autologin will cause your system to automatically log in the specified user on tty1."
     echo "This may log you out of the current session and exit this script."
@@ -387,6 +441,7 @@ EOL"
 # ============================================
 
 toggle_grub_os_prober() {
+    sudo -v
     clear
     print_ascii_art
     GRUB_CONFIG="/etc/default/grub"
@@ -420,6 +475,7 @@ toggle_grub_os_prober() {
 }
 
 toggle_grub_verbose_logging() {
+    sudo -v
     clear
     print_ascii_art
     GRUB_CONFIG="/etc/default/grub"
@@ -453,6 +509,7 @@ toggle_grub_verbose_logging() {
 }
 
 disable_mouse_acceleration() {
+    sudo -v
     clear
     print_ascii_art
     echo "Disabling mouse acceleration..."
@@ -493,11 +550,12 @@ EOL'
 }
 
 reboot_to_uefi() {
+    sudo -v
     run_with_status "Rebooting into UEFI Firmware Settings" "
         echo \"Rebooting in 3 seconds...\" && sleep 1 &&
         echo \"Rebooting in 2 seconds...\" && sleep 1 &&
         echo \"Rebooting in 1 second...\" && sleep 1 &&
-        systemctl reboot --firmware-setup
+        sudo systemctl reboot --firmware-setup
     "
 }
 
