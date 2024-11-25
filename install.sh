@@ -273,8 +273,11 @@ swap_size_menu() {
         timezone_menu
         ;;
     1)
-        echo "Enter desired swap size in GB (e.g., 4G):"
+        echo "Enter desired swap size in GB (e.g., 4):"
         read -r SWAP_SIZE < /dev/tty
+        if [[ "$SWAP_SIZE" =~ ^[0-9]+$ ]]; then
+            SWAP_SIZE="${SWAP_SIZE}G"
+        fi
         timezone_menu
         ;;
     esac
