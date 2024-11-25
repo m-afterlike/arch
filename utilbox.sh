@@ -5,6 +5,7 @@
 # ============================================
 
 print_ascii_art() {
+    clear
     cat <<"EOF"
 
 ██╗   ██╗████████╗██╗██╗     ██████╗  ██████╗ ██╗  ██╗
@@ -14,7 +15,12 @@ print_ascii_art() {
 ╚██████╔╝   ██║   ██║███████╗██████╔╝╚██████╔╝██╔╝ ██╗
  ╚═════╝    ╚═╝   ╚═╝╚══════╝╚═════╝  ╚═════╝ ╚═╝  ╚═╝
                                                       
+
 EOF
+}
+
+install_packages() {
+    sudo pacman -Sy --noconfirm --needed "$@" || echo "Failed to install packages: $@"
 }
 
 select_option() {
@@ -41,10 +47,10 @@ select_option() {
 
         last_selected=$selected
 
-        read -rsn1 key
+        read -rsn1 key < /dev/tty
         case $key in
         $'\x1b')
-            read -rsn2 -t 0.1 key
+            read -rsn2 -t 0.1 key < /dev/tty
             case $key in
             '[A')
                 ((selected--))
@@ -84,158 +90,386 @@ run_with_status() {
     main_menu
 }
 
+error_message() {
+    echo -e "ERROR: $1"
+    sleep 2
+}
+
+# ============================================
+# APPLICATIONS SETUP FUNCTIONS
+# ============================================
+
+install_kitty() {
+    run_with_status "Installing Kitty" "install_packages kitty"
+}
+
+install_rofi() {
+    run_with_status "Installing Rofi" "install_packages rofi"
+}
+
+install_yay() {
+    run_with_status "Installing Yay AUR Helper" "
+        sudo -v &&
+        install_packages base-devel git &&
+        cd \$HOME &&
+        git clone https://aur.archlinux.org/yay.git &&
+        cd yay &&
+        makepkg --noconfirm -si &&
+        cd ../ &&
+        rm -rf yay
+    "
+}
+
+install_paru() {
+    run_with_status "Installing Paru AUR Helper" "
+        sudo -v &&
+        install_packages base-devel git &&
+        cd \$HOME &&
+        git clone https://aur.archlinux.org/paru.git &&
+        cd paru &&
+        makepkg --noconfirm -si &&
+        cd ../ &&
+        rm -rf paru
+    "
+}
+
+# ============================================
+# SYSTEM SETUP FUNCTIONS
+# ============================================
+
+setup_secure_boot() {
+    clear
+    print_ascii_art
+    echo "Setting up Secure Boot..."
+
+    # Regenerate GRUB EFI binary
+    run_with_status "Regenerating GRUB EFI binary" "
+        sudo grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --modules=\"tpm\" --disable-shim-lock
+    "
+
+    # Install sbctl
+    run_with_status "Installing sbctl" "install_packages sbctl"
+
+    # Check sbctl status
+    SBCTL_STATUS=$(sudo sbctl status)
+    echo "$SBCTL_STATUS"
+
+    SETUP_MODE=$(echo "$SBCTL_STATUS" | grep "Setup Mode:" | awk '{print $4}')
+    SECURE_BOOT=$(echo "$SBCTL_STATUS" | grep "Secure Boot:" | awk '{print $4}')
+
+    if [[ "$SETUP_MODE" == "Enabled" && "$SECURE_BOOT" == "Disabled" ]]; then
+        echo "System is in Setup Mode with Secure Boot disabled."
+    else
+        echo "Warning: You must be in Setup Mode with Secure Boot disabled to proceed."
+        echo "Current Setup Mode: $SETUP_MODE"
+        echo "Current Secure Boot: $SECURE_BOOT"
+        echo ""
+        echo "Do you want to proceed anyway?"
+        options=("Yes" "No")
+        select_option "${options[@]}"
+        selected=$?
+        if [[ $selected -ne 0 ]]; then
+            echo "Exiting Secure Boot setup."
+            read -p "Press Enter to return to the main menu..." </dev/tty
+            main_menu
+        fi
+    fi
+
+    # Create custom secure boot keys
+    run_with_status "Creating custom Secure Boot keys" "sudo sbctl create-keys"
+
+    # Enroll keys including Microsoft keys
+    run_with_status "Enrolling keys (including Microsoft keys)" "sudo sbctl enroll-keys -m"
+
+    # Detect EFI files to sign
+    mapfile -t EFI_FILES < <(sudo find /boot -type f -name "*.efi" ! -path "*/Microsoft/*")
+
+    # Detect kernel images
+    KERNEL_IMAGES=($(sudo find /boot -type f -name "vmlinuz-linux*" -o -name "vmlinuz-linux-lts" -o -name "vmlinuz-linux-hardened" -o -name "vmlinuz-linux-zen"))
+
+    # Combine files to sign
+    FILES_TO_SIGN=("${EFI_FILES[@]}" "${KERNEL_IMAGES[@]}")
+
+    # Remove empty entries
+    FILES_TO_SIGN=("${FILES_TO_SIGN[@]}")
+
+    # Allow user to select files to sign
+    select_files_to_sign
+
+    # Auto sign all files first
+    run_with_status "Auto-signing all EFI binaries" "sudo sbctl sign-all"
+
+    # Manually sign selected files
+    for file in "${FILES_TO_SIGN[@]}"; do
+        run_with_status "Signing $file" "sudo sbctl sign -s \"$file\""
+    done
+
+    # Rebuild initramfs
+    run_with_status "Rebuilding initramfs" "sudo mkinitcpio -P"
+
+    # Regenerate GRUB configuration
+    run_with_status "Regenerating GRUB configuration" "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+
+    # Completion message
+    clear
+    print_ascii_art
+    echo "Secure Boot setup is complete."
+    echo "What would you like to do now?"
+    options=("Boot into UEFI Firmware Settings to enable Secure Boot" "Return to Main Menu")
+    select_option "${options[@]}"
+    selected=$?
+    case $selected in
+    0)
+        reboot_to_uefi
+        ;;
+    1)
+        main_menu
+        ;;
+    esac
+}
+
+select_files_to_sign() {
+    print_ascii_art
+    echo "Select files to sign:"
+    options=("${FILES_TO_SIGN[@]}" "Add Custom File" "Continue")
+    selections=()
+    while true; do
+        select_option "${options[@]}"
+        selected=$?
+        if [ "${options[$selected]}" == "Continue" ]; then
+            break
+        elif [ "${options[$selected]}" == "Add Custom File" ]; then
+            echo "Enter the full path of the custom file to sign:"
+            read -r custom_file < /dev/tty
+            if [ -f "$custom_file" ]; then
+                FILES_TO_SIGN+=("$custom_file")
+                options=("${FILES_TO_SIGN[@]}" "Add Custom File" "Continue")
+            else
+                error_message "File not found: $custom_file"
+            fi
+        else
+            # Toggle selection
+            if [[ " ${selections[@]} " =~ " ${options[$selected]} " ]]; then
+                selections=("${selections[@]/${options[$selected]}}")
+            else
+                selections+=("${options[$selected]}")
+            fi
+        fi
+
+        # Display current selections
+        echo "Selected files:"
+        for file in "${selections[@]}"; do
+            echo "  $file"
+        done
+    done
+
+    FILES_TO_SIGN=("${selections[@]}")
+}
+
+create_user_directories() {
+    run_with_status "Creating user directories" "
+        install_packages xdg-user-dirs &&
+        xdg-user-dirs-update
+    "
+}
+
+setup_getty_autologin() {
+    print_ascii_art
+    echo "Setting up Getty autologin..."
+    echo "Enter the username for autologin:"
+    read -r AUTOLOGIN_USER < /dev/tty
+
+    if id -u "$AUTOLOGIN_USER" >/dev/null 2>&1; then
+        sudo mkdir -p /etc/systemd/system/getty@tty1.service.d
+        sudo bash -c "cat > /etc/systemd/system/getty@tty1.service.d/autologin.conf <<EOL
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty -o '-p -f -- \\\\u' --noclear --autologin $AUTOLOGIN_USER %I \$TERM
+EOL"
+        sudo systemctl daemon-reload
+        run_with_status "Enabling autologin for $AUTOLOGIN_USER" "sudo systemctl restart getty@tty1.service"
+    else
+        error_message "User $AUTOLOGIN_USER does not exist."
+        main_menu
+    fi
+}
+
+# ============================================
+# UTILITIES FUNCTIONS
+# ============================================
+
+toggle_grub_os_prober() {
+    clear
+    print_ascii_art
+    GRUB_CONFIG="/etc/default/grub"
+    if grep -q "^GRUB_DISABLE_OS_PROBER=false" "$GRUB_CONFIG"; then
+        echo "os-prober is currently ENABLED."
+        echo "Would you like to DISABLE it?"
+        options=("Yes" "No")
+        select_option "${options[@]}"
+        selected=$?
+        if [[ $selected -eq 0 ]]; then
+            sudo sed -i 's/^GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=true/' "$GRUB_CONFIG"
+            run_with_status "Disabling os-prober" "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+        else
+            main_menu
+        fi
+    else
+        echo "os-prober is currently DISABLED."
+        echo "Would you like to ENABLE it?"
+        options=("Yes" "No")
+        select_option "${options[@]}"
+        selected=$?
+        if [[ $selected -eq 0 ]]; then
+            sudo sed -i 's/^GRUB_DISABLE_OS_PROBER=true/GRUB_DISABLE_OS_PROBER=false/' "$GRUB_CONFIG"
+            run_with_status "Enabling os-prober" "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+        else
+            main_menu
+        fi
+    fi
+}
+
+toggle_grub_verbose_logging() {
+    clear
+    print_ascii_art
+    GRUB_CONFIG="/etc/default/grub"
+    if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=".*debug.*"' "$GRUB_CONFIG"; then
+        echo "GRUB verbose logging is currently ENABLED."
+        echo "Would you like to DISABLE it?"
+        options=("Yes" "No")
+        select_option "${options[@]}"
+        selected=$?
+        if [[ $selected -eq 0 ]]; then
+            sudo sed -i 's/\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\) debug\(.*"\)/\1\2/' "$GRUB_CONFIG"
+            run_with_status "Disabling GRUB verbose logging" "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+        else
+            main_menu
+        fi
+    else
+        echo "GRUB verbose logging is currently DISABLED."
+        echo "Would you like to ENABLE it?"
+        options=("Yes" "No")
+        select_option "${options[@]}"
+        selected=$?
+        if [[ $selected -eq 0 ]]; then
+            sudo sed -i 's/^\(GRUB_CMDLINE_LINUX_DEFAULT="[^"]*\)"/\1 debug"/' "$GRUB_CONFIG"
+            run_with_status "Enabling GRUB verbose logging" "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+        else
+            main_menu
+        fi
+    fi
+}
+
+disable_mouse_acceleration() {
+    run_with_status "Disabling mouse acceleration" "
+        sudo mkdir -p /etc/X11/xorg.conf.d &&
+        sudo bash -c 'cat > /etc/X11/xorg.conf.d/40-libinput.conf <<EOL
+Section \"InputClass\"
+    Identifier \"libinput pointer catchall\"
+    MatchIsPointer \"on\"
+    MatchDevicePath \"/dev/input/event*\"
+    Driver \"libinput\"
+    Option \"AccelProfile\" \"flat\"
+EndSection
+EOL'
+    "
+}
+
+reboot_to_uefi() {
+    run_with_status "Rebooting into UEFI Firmware Settings" "
+        echo \"Rebooting in 3 seconds...\" && sleep 1 &&
+        echo \"Rebooting in 2 seconds...\" && sleep 1 &&
+        echo \"Rebooting in 1 second...\" && sleep 1 &&
+        systemctl reboot --firmware-setup
+    "
+}
+
 # ============================================
 # MENUS
 # ============================================
 
 main_menu() {
-    clear
     print_ascii_art
+    echo "Select a category:"
     options=(
-        "Boot Utilities"
-        "System Utilities"
-        "Application Setup"
+        "Applications Setup"
+        "System Setup"
+        "Utilities"
         "Exit"
     )
     select_option "${options[@]}"
     selected=$?
     case $selected in
-    0) boot_utils_menu ;;   # Boot Utilities
-    1) system_utils_menu ;; # System Utilities
-    2) app_setup_menu ;;    # Application Setup
-    3) clear && exit 0 ;;   # Exit
+    0) applications_setup_menu ;;
+    1) system_setup_menu ;;
+    2) utilities_menu ;;
+    3) clear && exit 0 ;;
     esac
 }
 
-boot_utils_menu() {
-    clear
+applications_setup_menu() {
     print_ascii_art
+    echo "Applications Setup:"
     options=(
-        "Enable GRUB verbose logging"
-        "Disable GRUB verbose logging"
-        "Set up Secure Boot"
-        "Enable os-prober (detect other OSes in GRUB)"
-        "Disable os-prober"
+        "Install Kitty"
+        "Install Rofi"
+        "Install Yay AUR Helper"
+        "Install Paru AUR Helper"
+        "Back"
+    )
+    select_option "${options[@]}"
+    selected=$?
+    case $selected in
+    0) install_kitty ;;
+    1) install_rofi ;;
+    2) install_yay ;;
+    3) install_paru ;;
+    4) main_menu ;;
+    esac
+}
+
+system_setup_menu() {
+    print_ascii_art
+    echo "System Setup:"
+    options=(
+        "Setup Secure Boot"
+        "Create User Directories"
+        "Setup Getty Autologin"
+        "Back"
+    )
+    select_option "${options[@]}"
+    selected=$?
+    case $selected in
+    0) setup_secure_boot ;;
+    1) create_user_directories ;;
+    2) setup_getty_autologin ;;
+    3) main_menu ;;
+    esac
+}
+
+utilities_menu() {
+    print_ascii_art
+    echo "Utilities:"
+    options=(
+        "Toggle GRUB os-prober"
+        "Toggle GRUB Verbose Logging"
+        "Disable Mouse Acceleration"
         "Boot into UEFI Firmware Settings"
         "Back"
     )
     select_option "${options[@]}"
     selected=$?
     case $selected in
-    0) run_with_status "Enable GRUB verbose logging" enable_grub_verbose_logging ;;
-    1) run_with_status "Disable GRUB verbose logging" disable_grub_verbose_logging ;;
-    2) run_with_status "Set up Secure Boot" setup_secure_boot ;;
-    3) run_with_status "Enable os-prober" enable_os_prober ;;
-    4) run_with_status "Disable os-prober" disable_os_prober ;;
-    5) run_with_status "Boot into UEFI Firmware Settings" boot_into_uefi ;;
-    6) main_menu ;;
-    esac
-}
-
-app_setup_menu() {
-    clear
-    print_ascii_art
-    options=(
-        "Install Paru"
-        "Install Yay"
-        "Back"
-    )
-    select_option "${options[@]}"
-    selected=$?
-    case $selected in
-    0) run_with_status "Install Paru" install_paru ;;
-    1) run_with_status "Install Yay" install_yay ;;
-    2) main_menu ;;
-    esac
-}
-
-system_utils_menu() {
-    clear
-    print_ascii_art
-    options=(
-        "Create user directories like ~/Desktop and ~/Music"
-        "Back"
-    )
-    select_option "${options[@]}"
-    selected=$?
-    case $selected in
-    0) run_with_status "Create user directories" create_user_dirs ;;
-    1) main_menu ;;
+    0) toggle_grub_os_prober ;;
+    1) toggle_grub_verbose_logging ;;
+    2) disable_mouse_acceleration ;;
+    3) reboot_to_uefi ;;
+    4) main_menu ;;
     esac
 }
 
 # ============================================
-# SCRIPT FUNCTIONS
+# SCRIPT ENTRY POINT
 # ============================================
 
-# BOOT UTILS
-enable_grub_verbose_logging() {
-    sudo -v &&
-    sudo sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/"$/ debug"/' /etc/default/grub &&
-    sudo grub-mkconfig -o /boot/grub/grub.cfg
-}
-
-disable_grub_verbose_logging() {
-    sudo -v &&
-    sudo sed -i '/^GRUB_CMDLINE_LINUX_DEFAULT=/ s/ debug"$/"/' /etc/default/grub &&
-    sudo grub-mkconfig -o /boot/grub/grub.cfg
-}
-
-setup_secure_boot() {
-    echo "Test"
-}
-
-enable_os_prober() {
-    sudo -v &&
-    sudo pacman -S --noconfirm os-prober &&
-    sudo sed -i '/^GRUB_DISABLE_OS_PROBER=/d' /etc/default/grub &&
-    echo "GRUB_DISABLE_OS_PROBER=false" | sudo tee -a /etc/default/grub &&
-    sudo grub-mkconfig -o /boot/grub/grub.cfg
-}
-
-disable_os_prober() {
-    sudo -v &&
-    echo "Disabling os-prober..." &&
-    sudo sed -i '/^GRUB_DISABLE_OS_PROBER=/d' /etc/default/grub &&
-    echo "GRUB_DISABLE_OS_PROBER=true" | sudo tee -a /etc/default/grub &&
-    sudo grub-mkconfig -o /boot/grub/grub.cfg
-}
-
-boot_into_uefi() {
-    echo "Rebooting in 3 seconds..." && sleep 1 &&
-    echo "Rebooting in 2 seconds..." && sleep 1 &&
-    echo "Rebooting in 1 second..." && sleep 1 &&
-    systemctl reboot --firmware-setup
-}
-
-# APP SETUP
-install_paru() {
-    sudo -v &&
-    sudo pacman -S --needed --noconfirm base-devel git &&
-    cd && git clone https://aur.archlinux.org/paru.git &&
-    cd paru && makepkg --noconfirm -si &&
-    cd ../ && rm -rf paru
-}
-
-install_yay() {
-    sudo -v &&
-    sudo pacman -S --needed --noconfirm base-devel git &&
-    cd && git clone https://aur.archlinux.org/yay.git &&
-    cd yay && makepkg --noconfirm -si &&
-    cd ../ && rm -rf yay
-}
-
-# SYSTEM UTILS
-create_user_dirs() {
-    sudo -v &&
-    sudo pacman -S --noconfirm xdg-user-dirs &&
-    xdg-user-dirs-update
-}
-
-# ============================================
-# SCRIPT START
-# ============================================
-
-clear
-print_ascii_art
 main_menu
