@@ -9,11 +9,9 @@ A simple script for installing Arch Linux alongside Windows, with an additional 
 
 ## Arch Install Script
 
-**Download and run the script**:
+**Curl and run the script**:
   ```bash
-  curl -O https://afterlike.org/archinstall.sh
-  chmod +x archinstall.sh
-  ./archinstall.sh
+  curl -fsSL https://afterlike.org/install.sh | bash
   ```
 
 **The script will guide you through**:
