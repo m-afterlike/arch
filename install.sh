@@ -252,7 +252,7 @@ filesystem_menu() {
 btrfs_subvolume_menu() {
     print_ascii_art
     echo "Select BTRFS subvolumes to create:"
-    options=("@home for /home" "@tmp for /tmp" "@snapshots for /.snapshots" "@var for /var")
+    options=("@home|/home" "@tmp|/tmp" "@snapshots|/.snapshots" "@var|/var")
     select_multiple_options "${options[@]}"
     SELECTED_SUBVOLUMES=("${SELECTED_OPTIONS[@]}")
     swap_size_menu
@@ -263,7 +263,7 @@ swap_size_menu() {
     RAM_SIZE=$(grep MemTotal /proc/meminfo | awk '{print int($2/1024/1024)+1}')
     echo "Detected RAM size: ${RAM_SIZE}GB"
     echo "Recommended swap size is equal to RAM size."
-    echo "Do you want to use ${RAM_SIZE}GB for swap?"
+    echo "Do you want to use ${RAM_SIZE}G for swap?"
     options=("Yes" "No")
     select_option "${options[@]}"
     selected=$?
@@ -274,11 +274,15 @@ swap_size_menu() {
         ;;
     1)
         echo "Enter desired swap size in GB (e.g., 4):"
-        read -r SWAP_SIZE < /dev/tty
-        if [[ "$SWAP_SIZE" =~ ^[0-9]+$ ]]; then
-            SWAP_SIZE="${SWAP_SIZE}G"
+        read -r SWAP_INPUT < /dev/tty
+        if [[ "$SWAP_INPUT" =~ ^[0-9]+$ ]]; then
+            SWAP_SIZE="${SWAP_INPUT}G"
+            timezone_menu
+        else
+            echo "Invalid input. Please enter a number."
+            sleep 2
+            swap_size_menu
         fi
-        timezone_menu
         ;;
     esac
 }
@@ -380,7 +384,7 @@ additional_options_menu() {
         esac
     done
     if [ "$INSTALL_EXTRA_PACKAGES" == "yes" ]; then
-        echo "Enter the packages you wish to install separated by spaces (e.g., fastfetch git neovim:"
+        echo "Enter the packages you wish to install separated by spaces (e.g., fastfetch git neovim):"
         read -r EXTRA_PACKAGES < /dev/tty
     fi
     secure_boot_menu
@@ -411,7 +415,11 @@ confirm_settings() {
     echo "Dual Boot: $DUAL_BOOT"
     echo "Filesystem: $FS"
     if [ "$FS" == "btrfs" ]; then
-        echo "BTRFS Subvolumes: ${SELECTED_SUBVOLUMES[*]}"
+        echo "BTRFS Subvolumes:"
+        for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
+            IFS='|' read -r subvol_name mount_point <<< "$subvol"
+            echo "  $subvol_name mounted at $mount_point"
+        done
     fi
     echo "Swap Size: $SWAP_SIZE"
     echo "Timezone: $TIMEZONE"
@@ -421,6 +429,7 @@ confirm_settings() {
     echo "Enable verbose logging in GRUB: $ENABLE_LOGGING"
     echo "Set up OpenSSH: $INSTALL_OPENSSH"
     echo "Install NetworkManager: $INSTALL_NETWORKMANAGER"
+    echo "Install extra packages: $EXTRA_PACKAGES"
     echo "Secure Boot: $SECURE_BOOT"
     echo "-----------------------------------------------"
     echo "Are these settings correct?"
@@ -545,14 +554,13 @@ start_installation() {
         mount "$ROOT_PARTITION" /mnt
         btrfs subvolume create /mnt/@
         for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
-            subvol_name=$(echo "$subvol" | awk '{print $1}')
+            IFS='|' read -r subvol_name mount_point <<< "$subvol"
             btrfs subvolume create "/mnt/$subvol_name"
         done
         umount /mnt
         mount -o subvol=@,compress=zstd "$ROOT_PARTITION" /mnt
         for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
-            subvol_name=$(echo "$subvol" | awk '{print $1}')
-            mount_point=$(echo "$subvol" | awk '{print $3}')
+            IFS='|' read -r subvol_name mount_point <<< "$subvol"
             mkdir -p "/mnt$mount_point"
             mount -o subvol="$subvol_name",compress=zstd "$ROOT_PARTITION" "/mnt$mount_point"
         done
@@ -568,17 +576,6 @@ start_installation() {
     # Install base system
     pacstrap /mnt base linux linux-firmware
 
-    # Install microcode
-    if grep -q "GenuineIntel" /proc/cpuinfo; then
-        echo "Installing Intel microcode"
-        arch-chroot /mnt pacman -S --noconfirm --needed intel-ucode
-    elif grep -q "AuthenticAMD" /proc/cpuinfo; then
-        echo "Installing AMD microcode"
-        arch-chroot /mnt pacman -S --noconfirm --needed amd-ucode
-    else
-        echo "Unable to determine CPU vendor. Skipping microcode installation."
-    fi
-
     # Generate fstab
     genfstab -U /mnt >> /mnt/etc/fstab
 
@@ -593,10 +590,19 @@ ENABLE_LOGGING='$ENABLE_LOGGING'
 INSTALL_OPENSSH='$INSTALL_OPENSSH'
 INSTALL_NETWORKMANAGER='$INSTALL_NETWORKMANAGER'
 SECURE_BOOT='$SECURE_BOOT'
+EXTRA_PACKAGES='$EXTRA_PACKAGES'
+DUAL_BOOT='$DUAL_BOOT'
 EOT
 
     # Function to perform tasks inside chroot
     configure_system() {
+        # Define install_packages function
+        install_packages() {
+            for pkg in "$@"; do
+                pacman -S --needed --noconfirm "$pkg" || echo "Failed to install package $pkg, continuing..."
+            done
+        }
+
         source /root/install.conf
 
         # Set timezone
@@ -648,6 +654,17 @@ EOF
             fi
         fi
 
+        # Install microcode
+        if grep -q "GenuineIntel" /proc/cpuinfo; then
+            echo "Installing Intel microcode"
+            PACKAGES="$PACKAGES intel-ucode"
+        elif grep -q "AuthenticAMD" /proc/cpuinfo; then
+            echo "Installing AMD microcode"
+            PACKAGES="$PACKAGES amd-ucode"
+        else
+            echo "Unable to determine CPU vendor. Skipping microcode installation."
+        fi
+
         # Install packages
         if [ -n "$EXTRA_PACKAGES" ]; then
             PACKAGES="$PACKAGES $EXTRA_PACKAGES"
@@ -684,7 +701,8 @@ EOF
         # Add os-prober to GRUB
         if [ "$DUAL_BOOT" == "yes" ]; then
             pacman -S --noconfirm os-prober
-            sed -i 's/^#GRUB_DISABLE_OS_PROBER=false/GRUB_DISABLE_OS_PROBER=false/' /etc/default/grub
+            sed -i '/^GRUB_DISABLE_OS_PROBER=/d' /etc/default/grub
+            echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
         fi
 
         # Generate GRUB configuration
@@ -700,8 +718,7 @@ EOF
     }
 
     # Copy functions to chroot environment
-    declare -f install_packages > /mnt/root/functions.sh
-    declare -f configure_system >> /mnt/root/functions.sh
+    declare -f configure_system > /mnt/root/functions.sh
 
     # Chroot into the new system and run configuration
     arch-chroot /mnt /bin/bash -c "
