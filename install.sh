@@ -436,6 +436,9 @@ confirm_settings() {
         ;;
     esac
 }
+#!/bin/bash
+
+# ... [Previous code remains unchanged] ...
 
 start_installation() {
     print_ascii_art
@@ -445,59 +448,107 @@ start_installation() {
     # Update system clock
     timedatectl set-ntp true
 
-    # Refresh pacman keys
+    # Ensure necessary packages are installed
     pacman -Sy --noconfirm
     pacman -S --noconfirm archlinux-keyring
+    pacman -S --noconfirm gptfdisk
 
     # Unmount any mounted partitions on /mnt
     umount -A --recursive /mnt || true
 
-    # Partition the disk
-    if [ "$DUAL_BOOT" == "no" ]; then
-        # Create new GPT partition table
-        parted -s "$DISK" mklabel gpt
+    if [ "$DUAL_BOOT" == "yes" ]; then
+        # For dual booting, find existing EFI partition on any disk
+        EFI_PARTITION=$(lsblk -lnpo NAME,FSTYPE,PARTLABEL | grep -i 'FSTYPE="vfat"' | grep -Ei 'PARTLABEL="(EFI|ESP|SYSTEM)"' | awk '{print $1}' | head -n1)
+        
+        # If not found, try to identify using partition type GUID (EF00)
+        if [ -z "$EFI_PARTITION" ]; then
+            EFI_PARTITION=$(blkid -t PARTUUID -o device | while read -r device; do
+                part_type=$(sgdisk -i "$(lsblk -no PARTNUM "$device")" "$(lsblk -no PKNAME "$device")" | grep 'Partition GUID code' | awk '{print $4}')
+                if [ "$part_type" == "EF00" ]; then
+                    echo "$device"
+                    break
+                fi
+            done)
+        fi
 
-        # Create partitions
-        parted -s "$DISK" mkpart primary fat32 1MiB 512MiB
-        parted -s "$DISK" set 1 esp on
-        parted -s "$DISK" mkpart primary linux-swap 512MiB "$((512 + ${SWAP_SIZE%G} * 1024))"MiB
-        parted -s "$DISK" mkpart primary ext4 "$((512 + ${SWAP_SIZE%G} * 1024))"MiB 100%
-
-        # Get partition names
-        EFI_PARTITION="${DISK}1"
-        SWAP_PARTITION="${DISK}2"
-        ROOT_PARTITION="${DISK}3"
-
-        # Format partitions
-        mkfs.fat -F32 "$EFI_PARTITION"
-    else
-        # For dual booting, find existing EFI partition
-        EFI_PARTITION=$(blkid | grep -i 'TYPE="vfat"' | grep -i 'EFI' | awk -F: '{print $1}')
         if [ -z "$EFI_PARTITION" ]; then
             echo "EFI partition not found."
             echo "Available partitions:"
-            lsblk -p -o NAME,SIZE,FSTYPE,MOUNTPOINT
+            lsblk -p -o NAME,SIZE,FSTYPE,MOUNTPOINT,PARTLABEL
             echo "Please enter the EFI partition (e.g., '/dev/nvme0n1p1'):"
             read -r EFI_PARTITION < /dev/tty
+        else
+            echo "Found EFI partition: $EFI_PARTITION"
         fi
 
-        # Create partitions
-        parted -s "$DISK" mkpart primary linux-swap 1MiB "${SWAP_SIZE}"
-        parted -s "$DISK" mkpart primary ext4 "${SWAP_SIZE}" 100%
+        # Create swap and root partitions on selected disk
+        echo "Creating partitions on $DISK..."
 
-        get_partition_suffix() {
-            if [[ "$DISK" =~ "nvme" ]]; then
-                echo "p"
-            else
-                echo ""
-            fi
-        }
-        PART_SUFFIX=$(get_partition_suffix)
-    
+        # Create swap partition
+        sgdisk -n0:0:+${SWAP_SIZE} -t0:8200 -c0:"Linux Swap" "$DISK"
+
+        # Create root partition
+        sgdisk -n0:0:0 -t0:8300 -c0:"Linux filesystem" "$DISK"
+
+        # Run partprobe to update the partition table
+        partprobe "$DISK"
+
         # Get partition names
-        EFI_PARTITION="${DISK}${PART_SUFFIX}1"
-        SWAP_PARTITION="${DISK}${PART_SUFFIX}2"
-        ROOT_PARTITION="${DISK}${PART_SUFFIX}3"
+        SWAP_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux Swap" | awk '{print $1}')
+        ROOT_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux filesystem" | awk '{print $1}')
+
+    else
+        # Not dual booting
+        # Check if EFI partition exists on selected disk
+        EFI_PARTITION_ON_DISK=$(lsblk -lnpo NAME,FSTYPE,PARTLABEL "$DISK" | grep -i 'FSTYPE="vfat"' | grep -Ei 'PARTLABEL="(EFI|ESP|SYSTEM)"' | awk '{print $1}')
+        
+        # If not found, check for partition type GUID (EF00)
+        if [ -z "$EFI_PARTITION_ON_DISK" ]; then
+            EFI_PARTITION_ON_DISK=$(blkid -t PARTUUID -o device | while read -r device; do
+                if [ "$(lsblk -no PKNAME "$device")" == "${DISK##*/}" ]; then
+                    part_type=$(sgdisk -i "$(lsblk -no PARTNUM "$device")" "$DISK" | grep 'Partition GUID code' | awk '{print $4}')
+                    if [ "$part_type" == "EF00" ]; then
+                        echo "$device"
+                        break
+                    fi
+                fi
+            done)
+        fi
+
+        if [ -n "$EFI_PARTITION_ON_DISK" ]; then
+            # EFI partition exists on selected disk
+            EFI_PARTITION="$EFI_PARTITION_ON_DISK"
+            echo "EFI partition found on $DISK ($EFI_PARTITION). Preserving EFI partition and deleting other partitions."
+            # Delete all other partitions
+            OTHER_PARTITIONS=$(lsblk -lnpo NAME "$DISK" | grep -v "$EFI_PARTITION")
+            for partition in $OTHER_PARTITIONS; do
+                wipefs -a "$partition"
+                PART_NUM=$(lsblk -no PARTNUM "$partition")
+                sgdisk --delete "$PART_NUM" "$DISK"
+            done
+        else
+            # No EFI partition on selected disk
+            echo "No EFI partition found on $DISK. Wiping the disk and creating new EFI partition."
+            sgdisk --zap-all "$DISK"
+
+            # Create EFI partition
+            sgdisk -n1:1MiB:+512MiB -t1:EF00 -c1:"EFI System Partition" "$DISK"
+            EFI_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "EFI System Partition" | awk '{print $1}')
+            mkfs.fat -F32 "$EFI_PARTITION"
+        fi
+
+        # Create swap partition
+        sgdisk -n0:0:+${SWAP_SIZE} -t0:8200 -c0:"Linux Swap" "$DISK"
+
+        # Create root partition
+        sgdisk -n0:0:0 -t0:8300 -c0:"Linux filesystem" "$DISK"
+
+        # Run partprobe to update the partition table
+        partprobe "$DISK"
+
+        # Get partition names
+        SWAP_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux Swap" | awk '{print $1}')
+        ROOT_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux filesystem" | awk '{print $1}')
     fi
 
     # Set up swap
