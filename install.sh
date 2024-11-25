@@ -25,9 +25,7 @@ if [ ! -f /usr/bin/pacstrap ]; then
 fi
 
 install_packages() {
-    for pkg in "$@"; do
-        pacman -S --needed --noconfirm "$pkg" || echo "Failed to install package $pkg, continuing..."
-    done
+    pacman -Sy --noconfirm --needed "$@" || echo "Failed to install packages: $@"
 }
 
 select_option() {
@@ -76,7 +74,6 @@ select_option() {
     return $selected
 }
 
-# Modified select_option for multiple selections
 select_multiple_options() {
     local options=("$@")
     options+=("Continue")  # Add "Continue" option at the end
@@ -163,6 +160,32 @@ select_multiple_options() {
             SELECTED_OPTIONS+=("${options[$i]}")
         fi
     done
+}
+
+error_message() {
+    echo -e "ERROR: $1"
+    sleep 2
+}
+
+detect_efi_partition() {
+    lsblk -lnpo NAME,FSTYPE,PARTLABEL | while read -r line; do
+        name=$(echo "$line" | awk '{print $1}')
+        fstype=$(echo "$line" | awk '{print $2}')
+        partlabel=$(echo "$line" | awk '{print $3}')
+        if [[ "$fstype" == "vfat" ]] && [[ "$partlabel" == *"EFI"* ]]; then
+            echo "$name"
+            return 0
+        fi
+    done
+    return 1
+}
+
+create_swap_partition() {
+    sgdisk -n0:0:+${SWAP_SIZE} -t0:8200 -c0:"Linux Swap" "$DISK"
+}
+
+create_root_partition() {
+    sgdisk -n0:0:0 -t0:8300 -c0:"Linux filesystem" "$DISK"
 }
 
 # ============================================
@@ -279,8 +302,7 @@ swap_size_menu() {
             SWAP_SIZE="${SWAP_INPUT}G"
             timezone_menu
         else
-            echo "Invalid input. Please enter a number."
-            sleep 2
+            error_message "Invalid input. Please enter a number."
             swap_size_menu
         fi
         ;;
@@ -323,7 +345,7 @@ userinfo_menu() {
             echo "Username accepted: $USERNAME"
             break
         else
-            echo "Incorrect username. Only lowercase letters, numbers, '_', and '-' are allowed, and must start with a letter."
+            error_message "Incorrect username. Only lowercase letters, numbers, '_', and '-' are allowed, and must start with a letter."
         fi
     done
 
@@ -336,7 +358,7 @@ userinfo_menu() {
             PASSWORD=$PASSWORD1
             break
         else
-            echo -ne "ERROR! Passwords do not match. \n"
+            error_message "Passwords do not match."
         fi
     done
 
@@ -347,7 +369,7 @@ userinfo_menu() {
             echo "Hostname accepted: $HOSTNAME"
             break
         else
-            echo "Incorrect hostname. Only letters, numbers, '_', '-', and '.' are allowed, and must start with a letter or number."
+            error_message "Incorrect hostname. Only letters, numbers, '_', '-', and '.' are allowed, and must start with a letter or number."
         fi
     done
     additional_options_menu
@@ -451,34 +473,16 @@ start_installation() {
     echo "Starting installation..."
     sleep 2
 
-    # Update system clock
+    # Update system clock and refresh keys
     timedatectl set-ntp true
-
-    # Ensure necessary packages are installed
-    pacman -Sy --noconfirm
-    pacman -S --noconfirm archlinux-keyring
-    pacman -S --noconfirm gptfdisk
+    install_packages archlinux-keyring gptfdisk
 
     # Unmount any mounted partitions on /mnt
     umount -A --recursive /mnt || true
 
-    # Function to detect EFI partition using lsblk
-    detect_efi_partition() {
-        lsblk -lnpo NAME,FSTYPE,PARTLABEL | while read -r line; do
-            name=$(echo "$line" | awk '{print $1}')
-            fstype=$(echo "$line" | awk '{print $2}')
-            partlabel=$(echo "$line" | awk '{print $3}')
-            if [[ "$fstype" == "vfat" ]] && [[ "$partlabel" == *"EFI"* ]]; then
-                echo "$name"
-                return 0
-            fi
-        done
-        return 1
-    }
-
+    # Detect EFI partition
+    EFI_PARTITION=$(detect_efi_partition)
     if [ "$DUAL_BOOT" == "yes" ]; then
-        # For dual booting, find existing EFI partition on any disk
-        EFI_PARTITION=$(detect_efi_partition)
         if [ -z "$EFI_PARTITION" ]; then
             echo "EFI partition not found."
             echo "Available partitions:"
@@ -505,22 +509,6 @@ start_installation() {
             sgdisk --zap-all "$DISK"
         fi
 
-        # Create swap and root partitions on selected disk
-        echo "Creating partitions on $DISK..."
-
-        # Create swap partition
-        sgdisk -n0:0:+${SWAP_SIZE} -t0:8200 -c0:"Linux Swap" "$DISK"
-
-        # Create root partition
-        sgdisk -n0:0:0 -t0:8300 -c0:"Linux filesystem" "$DISK"
-
-        # Run partprobe to update the partition table
-        partprobe "$DISK"
-
-        # Get partition names
-        SWAP_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux Swap" | awk '{print $1}')
-        ROOT_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux filesystem" | awk '{print $1}')
-
     else
         # Not dual booting
         sgdisk --zap-all "$DISK"
@@ -529,20 +517,18 @@ start_installation() {
         sgdisk -n1:1MiB:+512MiB -t1:EF00 -c1:"EFI System Partition" "$DISK"
         EFI_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "EFI System Partition" | awk '{print $1}')
         mkfs.fat -F32 "$EFI_PARTITION"
-        
-        # Create swap partition
-        sgdisk -n0:0:+${SWAP_SIZE} -t0:8200 -c0:"Linux Swap" "$DISK"
-
-        # Create root partition
-        sgdisk -n0:0:0 -t0:8300 -c0:"Linux filesystem" "$DISK"
-
-        # Run partprobe to update the partition table
-        partprobe "$DISK"
-
-        # Get partition names
-        SWAP_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux Swap" | awk '{print $1}')
-        ROOT_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux filesystem" | awk '{print $1}')
     fi
+
+    # Create swap and root partitions
+    create_swap_partition
+    create_root_partition
+
+    # Run partprobe to update the partition table
+    partprobe "$DISK"
+
+    # Get partition names
+    SWAP_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux Swap" | awk '{print $1}')
+    ROOT_PARTITION=$(lsblk -lnpo NAME,PARTLABEL "$DISK" | grep "Linux filesystem" | awk '{print $1}')
 
     # Set up swap
     mkswap "$SWAP_PARTITION"
@@ -574,7 +560,7 @@ start_installation() {
     mount "$EFI_PARTITION" /mnt/boot
 
     # Install base system
-    pacstrap /mnt base linux linux-firmware
+    install_packages base linux linux-firmware --root /mnt
 
     # Generate fstab
     genfstab -U /mnt >> /mnt/etc/fstab
@@ -596,14 +582,12 @@ EOT
 
     # Function to perform tasks inside chroot
     configure_system() {
+        source /root/install.conf
+
         # Define install_packages function
         install_packages() {
-            for pkg in "$@"; do
-                pacman -S --needed --noconfirm "$pkg" || echo "Failed to install package $pkg, continuing..."
-            done
+            pacman -Sy --noconfirm --needed "$@" || echo "Failed to install packages: $@"
         }
-
-        source /root/install.conf
 
         # Set timezone
         ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
@@ -626,29 +610,29 @@ EOF
         echo "root:$PASSWORD" | chpasswd
 
         # Initialize packages to install
-        PACKAGES="sudo grub efibootmgr linux-headers dkms"
+        PACKAGES=(sudo grub efibootmgr linux-headers dkms)
 
         # Install NetworkManager if selected
-        if [ "$INSTALL_NETWORKMANAGER" == "yes" ]; then
-            PACKAGES="$PACKAGES networkmanager"
-        fi
+        [[ "$INSTALL_NETWORKMANAGER" == "yes" ]] && PACKAGES+=(networkmanager)
 
         # Install OpenSSH if selected
         if [ "$INSTALL_OPENSSH" == "yes" ]; then
-            PACKAGES="$PACKAGES openssh"
+            PACKAGES+=(openssh)
+            systemctl enable sshd
+            sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
         fi
 
         # Install graphics drivers if desired
         if [ "$INSTALL_GRAPHICS_DRIVERS" == "yes" ]; then
             gpu_type=$(lspci)
             if echo "${gpu_type}" | grep -E "NVIDIA|GeForce"; then
-                PACKAGES="$PACKAGES nvidia-dkms nvidia-utils"
+                PACKAGES+=(nvidia-dkms nvidia-utils)
                 # Update mkinitcpio.conf
                 sed -i 's/^MODULES=.*/MODULES=(nvidia nvidia_modeset nvidia_uvm nvidia_drm)/' /etc/mkinitcpio.conf
             elif echo "${gpu_type}" | grep 'VGA' | grep -E "Radeon|AMD"; then
-                PACKAGES="$PACKAGES xf86-video-amdgpu"
+                PACKAGES+=(xf86-video-amdgpu)
             elif echo "${gpu_type}" | grep -E "Integrated Graphics Controller|Intel Corporation UHD"; then
-                PACKAGES="$PACKAGES mesa xf86-video-intel vulkan-intel libva-intel-driver libva-utils lib32-mesa"
+                PACKAGES+=(mesa xf86-video-intel vulkan-intel libva-intel-driver libva-utils lib32-mesa)
             else
                 echo "No compatible GPU detected. Skipping graphics drivers installation."
             fi
@@ -657,30 +641,25 @@ EOF
         # Install microcode
         if grep -q "GenuineIntel" /proc/cpuinfo; then
             echo "Installing Intel microcode"
-            PACKAGES="$PACKAGES intel-ucode"
+            PACKAGES+=(intel-ucode)
         elif grep -q "AuthenticAMD" /proc/cpuinfo; then
             echo "Installing AMD microcode"
-            PACKAGES="$PACKAGES amd-ucode"
+            PACKAGES+=(amd-ucode)
         else
             echo "Unable to determine CPU vendor. Skipping microcode installation."
         fi
 
-        # Install packages
+        # Include extra packages
         if [ -n "$EXTRA_PACKAGES" ]; then
-            PACKAGES="$PACKAGES $EXTRA_PACKAGES"
+            PACKAGES+=($EXTRA_PACKAGES)
         fi
 
-        install_packages $PACKAGES
+        # Install all packages
+        install_packages "${PACKAGES[@]}"
 
         # Enable NetworkManager if selected
         if [ "$INSTALL_NETWORKMANAGER" == "yes" ]; then
             systemctl enable NetworkManager
-        fi
-
-        # Enable OpenSSH if selected
-        if [ "$INSTALL_OPENSSH" == "yes" ]; then
-            sed -i 's/^#PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
-            systemctl enable sshd
         fi
 
         # Generate initramfs
@@ -700,7 +679,7 @@ EOF
 
         # Add os-prober to GRUB
         if [ "$DUAL_BOOT" == "yes" ]; then
-            pacman -S --noconfirm os-prober
+            install_packages os-prober
             sed -i '/^GRUB_DISABLE_OS_PROBER=/d' /etc/default/grub
             echo "GRUB_DISABLE_OS_PROBER=false" >> /etc/default/grub
         fi
