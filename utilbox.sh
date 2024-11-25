@@ -81,13 +81,11 @@ run_with_status() {
     echo "Running: $task_name..."
     if eval "$command"; then
         echo -e "\n\e[32m✔ $task_name succeeded.\e[0m"
+        return 0
     else
         echo -e "\n\e[31m✖ $task_name failed. Please check for errors.\e[0m"
+        return 1
     fi
-
-    # Pause briefly and return to the main menu
-    read -p "Press Enter to return to the main menu..." </dev/tty
-    main_menu
 }
 
 error_message() {
@@ -101,10 +99,14 @@ error_message() {
 
 install_kitty() {
     run_with_status "Installing Kitty" "install_packages kitty"
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 install_rofi() {
     run_with_status "Installing Rofi" "install_packages rofi"
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 install_yay() {
@@ -118,6 +120,8 @@ install_yay() {
         cd ../ &&
         rm -rf yay
     "
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 install_paru() {
@@ -131,6 +135,39 @@ install_paru() {
         cd ../ &&
         rm -rf paru
     "
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
+}
+
+install_oh_my_zsh() {
+    clear
+    print_ascii_art
+    echo "Installing Oh My Zsh..."
+    if ! run_with_status "Installing Zsh" "install_packages zsh"; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
+
+    echo "Changing default shell to Zsh for current user..."
+    if ! chsh -s "$(which zsh)"; then
+        error_message "Failed to change default shell."
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
+
+    echo "Installing Oh My Zsh..."
+    if ! sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"; then
+        error_message "Failed to install Oh My Zsh."
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
+
+    echo -e "\n\e[32m✔ Oh My Zsh installation completed.\e[0m"
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 # ============================================
@@ -143,12 +180,20 @@ setup_secure_boot() {
     echo "Setting up Secure Boot..."
 
     # Regenerate GRUB EFI binary
-    run_with_status "Regenerating GRUB EFI binary" "
+    if ! run_with_status "Regenerating GRUB EFI binary" "
         sudo grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB --modules=\"tpm\" --disable-shim-lock
-    "
+    "; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
 
     # Install sbctl
-    run_with_status "Installing sbctl" "install_packages sbctl"
+    if ! run_with_status "Installing sbctl" "install_packages sbctl"; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
 
     # Check sbctl status
     SBCTL_STATUS=$(sudo sbctl status)
@@ -172,14 +217,23 @@ setup_secure_boot() {
             echo "Exiting Secure Boot setup."
             read -p "Press Enter to return to the main menu..." </dev/tty
             main_menu
+            return
         fi
     fi
 
     # Create custom secure boot keys
-    run_with_status "Creating custom Secure Boot keys" "sudo sbctl create-keys"
+    if ! run_with_status "Creating custom Secure Boot keys" "sudo sbctl create-keys"; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
 
     # Enroll keys including Microsoft keys
-    run_with_status "Enrolling keys (including Microsoft keys)" "sudo sbctl enroll-keys -m"
+    if ! run_with_status "Enrolling keys (including Microsoft keys)" "sudo sbctl enroll-keys -m"; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
 
     # Detect EFI files to sign
     mapfile -t EFI_FILES < <(sudo find /boot -type f -name "*.efi" ! -path "*/Microsoft/*")
@@ -197,18 +251,32 @@ setup_secure_boot() {
     select_files_to_sign
 
     # Auto sign all files first
-    run_with_status "Auto-signing all EFI binaries" "sudo sbctl sign-all"
+    if ! run_with_status "Auto-signing all EFI binaries" "sudo sbctl sign-all"; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
 
     # Manually sign selected files
     for file in "${FILES_TO_SIGN[@]}"; do
-        run_with_status "Signing $file" "sudo sbctl sign -s \"$file\""
+        if ! run_with_status "Signing $file" "sudo sbctl sign -s \"$file\""; then
+            echo "Failed to sign $file. Continuing with next file."
+        fi
     done
 
     # Rebuild initramfs
-    run_with_status "Rebuilding initramfs" "sudo mkinitcpio -P"
+    if ! run_with_status "Rebuilding initramfs" "sudo mkinitcpio -P"; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
 
     # Regenerate GRUB configuration
-    run_with_status "Regenerating GRUB configuration" "sudo grub-mkconfig -o /boot/grub/grub.cfg"
+    if ! run_with_status "Regenerating GRUB configuration" "sudo grub-mkconfig -o /boot/grub/grub.cfg"; then
+        read -p "Press Enter to return to the main menu..." </dev/tty
+        main_menu
+        return
+    fi
 
     # Completion message
     clear
@@ -232,8 +300,18 @@ select_files_to_sign() {
     print_ascii_art
     echo "Select files to sign:"
     options=("${FILES_TO_SIGN[@]}" "Add Custom File" "Continue")
-    selections=()
+    selections=("${FILES_TO_SIGN[@]}")
     while true; do
+        echo "Current selections:"
+        for i in "${!options[@]}"; do
+            if [[ " ${selections[@]} " =~ " ${options[$i]} " ]]; then
+                prefix="[x]"
+            else
+                prefix="[ ]"
+            fi
+            echo "$prefix ${options[$i]}"
+        done
+        echo ""
         select_option "${options[@]}"
         selected=$?
         if [ "${options[$selected]}" == "Continue" ]; then
@@ -244,23 +322,20 @@ select_files_to_sign() {
             if [ -f "$custom_file" ]; then
                 FILES_TO_SIGN+=("$custom_file")
                 options=("${FILES_TO_SIGN[@]}" "Add Custom File" "Continue")
+                selections+=("$custom_file")
             else
                 error_message "File not found: $custom_file"
             fi
         else
             # Toggle selection
             if [[ " ${selections[@]} " =~ " ${options[$selected]} " ]]; then
+                # Remove from selections
                 selections=("${selections[@]/${options[$selected]}}")
             else
+                # Add to selections
                 selections+=("${options[$selected]}")
             fi
         fi
-
-        # Display current selections
-        echo "Selected files:"
-        for file in "${selections[@]}"; do
-            echo "  $file"
-        done
     done
 
     FILES_TO_SIGN=("${selections[@]}")
@@ -271,11 +346,22 @@ create_user_directories() {
         install_packages xdg-user-dirs &&
         xdg-user-dirs-update
     "
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 setup_getty_autologin() {
     print_ascii_art
-    echo "Setting up Getty autologin..."
+    echo "WARNING: Setting up Getty autologin will cause your system to automatically log in the specified user on tty1."
+    echo "This may log you out of the current session and exit this script."
+    echo "Do you want to proceed?"
+    options=("Yes" "No")
+    select_option "${options[@]}"
+    selected=$?
+    if [ $selected -ne 0 ]; then
+        main_menu
+    fi
+
     echo "Enter the username for autologin:"
     read -r AUTOLOGIN_USER < /dev/tty
 
@@ -292,6 +378,8 @@ EOL"
         error_message "User $AUTOLOGIN_USER does not exist."
         main_menu
     fi
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 # ============================================
@@ -327,6 +415,8 @@ toggle_grub_os_prober() {
             main_menu
         fi
     fi
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 toggle_grub_verbose_logging() {
@@ -358,12 +448,34 @@ toggle_grub_verbose_logging() {
             main_menu
         fi
     fi
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 disable_mouse_acceleration() {
-    run_with_status "Disabling mouse acceleration" "
-        sudo mkdir -p /etc/X11/xorg.conf.d &&
-        sudo bash -c 'cat > /etc/X11/xorg.conf.d/40-libinput.conf <<EOL
+    clear
+    print_ascii_art
+    echo "Disabling mouse acceleration..."
+    echo "The following file will be created:"
+    echo "/etc/X11/xorg.conf.d/40-libinput.conf"
+    echo ""
+    echo "File content:"
+    echo 'Section "InputClass"
+    Identifier "libinput pointer catchall"
+    MatchIsPointer "on"
+    MatchDevicePath "/dev/input/event*"
+    Driver "libinput"
+    Option "AccelProfile" "flat"
+EndSection'
+    echo ""
+    echo "Do you want to proceed?"
+    options=("Yes" "No")
+    select_option "${options[@]}"
+    selected=$?
+    if [[ $selected -eq 0 ]]; then
+        run_with_status "Disabling mouse acceleration" "
+            sudo mkdir -p /etc/X11/xorg.conf.d &&
+            sudo bash -c 'cat > /etc/X11/xorg.conf.d/40-libinput.conf <<EOL
 Section \"InputClass\"
     Identifier \"libinput pointer catchall\"
     MatchIsPointer \"on\"
@@ -372,7 +484,12 @@ Section \"InputClass\"
     Option \"AccelProfile\" \"flat\"
 EndSection
 EOL'
-    "
+        "
+    else
+        main_menu
+    fi
+    read -p "Press Enter to return to the main menu..." </dev/tty
+    main_menu
 }
 
 reboot_to_uefi() {
@@ -415,6 +532,7 @@ applications_setup_menu() {
         "Install Rofi"
         "Install Yay AUR Helper"
         "Install Paru AUR Helper"
+        "Install Oh My Zsh"
         "Back"
     )
     select_option "${options[@]}"
@@ -424,7 +542,8 @@ applications_setup_menu() {
     1) install_rofi ;;
     2) install_yay ;;
     3) install_paru ;;
-    4) main_menu ;;
+    4) install_oh_my_zsh ;;
+    5) main_menu ;;
     esac
 }
 
