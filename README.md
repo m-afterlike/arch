@@ -22,7 +22,7 @@ A simple script for installing Arch Linux alongside Windows, with an additional 
 > - **Test in a virtual machine** before applying to your live system.
 > - **Backup your data** before running the script.
 
-## Utility Script
+## Utilbox Script
 
 **Download and run the script**:
   ```bash
