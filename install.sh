@@ -273,12 +273,106 @@ filesystem_menu() {
 }
 
 btrfs_subvolume_menu() {
+    SELECTED_SUBVOLUMES=()
+    while true; do
+        print_ascii_art
+        echo "Selected BTRFS subvolumes:"
+        if [ "${#SELECTED_SUBVOLUMES[@]}" -eq 0 ]; then
+            echo "None"
+        else
+            for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
+                IFS='|' read -r subvol_name mount_point <<< "$subvol"
+                echo "  $subvol_name --> $mount_point"
+            done
+        fi
+        echo ""
+        echo "Options:"
+        options=("Add Default Subvolumes" "Add Custom Subvolume" "Remove Subvolume" "Done")
+        select_option "${options[@]}"
+        selected=$?
+        case $selected in
+        0) # Add Default Subvolumes
+            btrfs_add_default_subvolumes
+            ;;
+        1) # Add Custom Subvolume
+            btrfs_custom_subvolume_menu
+            ;;
+        2) # Remove Subvolume
+            btrfs_remove_subvolume_menu
+            ;;
+        3) # Done
+            swap_size_menu
+            break
+            ;;
+        esac
+    done
+}
+
+btrfs_add_default_subvolumes() {
     print_ascii_art
-    echo "Select BTRFS subvolumes to create:"
-    options=("@home|/home" "@tmp|/tmp" "@snapshots|/.snapshots" "@var|/var")
+    echo "Select default BTRFS subvolumes to add:"
+    default_options=("@home --> /home" "@tmp --> /tmp" "@snapshots --> /.snapshots" "@var --> /var")
+    select_multiple_options "${default_options[@]}"
+    for opt in "${SELECTED_OPTIONS[@]}"; do
+        case $opt in
+        "@home --> /home")
+            SELECTED_SUBVOLUMES+=("@home|/home")
+            ;;
+        "@tmp --> /tmp")
+            SELECTED_SUBVOLUMES+=("@tmp|/tmp")
+            ;;
+        "@snapshots --> /.snapshots")
+            SELECTED_SUBVOLUMES+=("@snapshots|/.snapshots")
+            ;;
+        "@var --> /var")
+            SELECTED_SUBVOLUMES+=("@var|/var")
+            ;;
+        esac
+    done
+}
+
+btrfs_custom_subvolume_menu() {
+    while true; do
+        echo "Enter custom subvolume name (without '@'), or type 'done' to finish adding custom subvolumes:"
+        read -r subvol_name < /dev/tty
+        if [ "$subvol_name" == "done" ]; then
+            break
+        fi
+        subvol_name_cleaned=$(echo "$subvol_name" | sed 's/[^a-zA-Z0-9_-]//g')
+        subvol_name="@$subvol_name_cleaned"
+
+        echo "Enter mount point for $subvol_name:"
+        read -r mount_point < /dev/tty
+
+        SELECTED_SUBVOLUMES+=("$subvol_name|$mount_point")
+        echo "Added custom subvolume: $subvol_name --> $mount_point"
+    done
+}
+
+btrfs_remove_subvolume_menu() {
+    if [ "${#SELECTED_SUBVOLUMES[@]}" -eq 0 ]; then
+        echo "No subvolumes to remove."
+        sleep 1
+        return
+    fi
+    print_ascii_art
+    echo "Select subvolumes to remove:"
+    options=()
+    for subvol in "${SELECTED_SUBVOLUMES[@]}"; do
+        IFS='|' read -r subvol_name mount_point <<< "${subvol}"
+        options+=("$subvol_name --> $mount_point")
+    done
     select_multiple_options "${options[@]}"
-    SELECTED_SUBVOLUMES=("${SELECTED_OPTIONS[@]}")
-    swap_size_menu
+    for opt in "${SELECTED_OPTIONS[@]}"; do
+        for i in "${!SELECTED_SUBVOLUMES[@]}"; do
+            IFS='|' read -r subvol_name mount_point <<< "${SELECTED_SUBVOLUMES[$i]}"
+            if [ "$opt" == "$subvol_name --> $mount_point" ]; then
+                unset 'SELECTED_SUBVOLUMES[$i]'
+            fi
+        done
+    done
+    # Remove empty elements
+    SELECTED_SUBVOLUMES=("${SELECTED_SUBVOLUMES[@]}")
 }
 
 swap_size_menu() {
