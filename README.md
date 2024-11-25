@@ -19,7 +19,6 @@ A simple script for installing Arch Linux alongside Windows, with an additional 
 >
 > - **I am not responsible for any data loss, system issues, or other problems.**
 > - **Read the script thoroughly** before running it.
-> - **Test in a virtual machine** before applying to your live system.
 > - **Backup your data** before running the script.
 
 ## Utilbox Script
@@ -29,5 +28,5 @@ A simple script for installing Arch Linux alongside Windows, with an additional 
   curl -fsSL https://afterlike.org/utilbox | bash
   ```
 
-**Notes on Secure Boot**:
-The `archutils.sh` script uses `sbctl` to generate Secure Boot keys and sign EFI files. Run Secure Boot setup only if Secure Boot is disabled in UEFI firmware and in Setup Mode until keys are enrolled. Only proceed with Secure Boot setup if you understand custom key enrollment.
+> [!NOTE]
+> The `archutils.sh` script uses `sbctl` to generate Secure Boot keys and sign EFI files. Run Secure Boot setup only if Secure Boot is disabled in UEFI firmware and in Setup Mode until keys are enrolled. Only proceed with Secure Boot setup if you understand custom key enrollment.
